@@ -1,0 +1,21 @@
+[project]
+name = "stargazing"
+version = "0.1.0"
+description = "Home Assistant custom integration for stargazing"
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "homeassistant",
+    "aiohttp",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-homeassistant-custom-component",
+    "pytest-asyncio",
+    "aioresponses",
+]
+
+[tool.uv]

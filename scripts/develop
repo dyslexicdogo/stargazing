@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -e
+cd "$(dirname "$0")/.."
+
+mkdir -p config
+if [ ! -f config/configuration.yaml ]; then
+  cat > config/configuration.yaml <<'EOF'
+default_config:
+logger:
+  default: info
+  logs:
+    custom_components.stargazing: debug
+EOF
+fi
+
+ln -sfn "$(pwd)/custom_components" config/custom_components
+
+# Ensure uv is in PATH
+export PATH="$HOME/.local/bin:$PATH"
+uv run hass -c config
