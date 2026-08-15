@@ -3,19 +3,18 @@ name = "stargazing"
 version = "0.1.0"
 description = "Home Assistant custom integration for stargazing"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13.2,<3.14"
 
 dependencies = [
-    "homeassistant",
-    "aiohttp",
+    "homeassistant==2026.2.3",
+    "astral",
+    "skyfield",
 ]
 
-[project.optional-dependencies]
-test = [
+[dependency-groups]
+dev = [
     "pytest",
-    "pytest-homeassistant-custom-component",
+    "pytest-homeassistant-custom-component>=0.13.3.16",
     "pytest-asyncio",
-    "aioresponses",
+    "aioresponses==0.7.9",
 ]
-
-[tool.uv]

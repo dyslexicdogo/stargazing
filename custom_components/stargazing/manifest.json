@@ -6,6 +6,6 @@
   "documentation": "https://github.com/dyslexicdogo/stargazing",
   "issue_tracker": "https://github.com/dyslexicdogo/stargazing/issues",
   "iot_class": "cloud_polling",
-  "requirements": [],
+  "requirements": ["skyfield>=1.42", "astral>=2.2"],
   "version": "0.8.0"
 }
