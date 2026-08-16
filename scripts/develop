@@ -17,4 +17,4 @@ ln -sfn "$(pwd)/custom_components" config/custom_components
 
 # Ensure uv is in PATH
 export PATH="$HOME/.local/bin:$PATH"
-uv run hass -c config
+hass -c config

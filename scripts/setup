@@ -7,6 +7,4 @@ set -e
 #    export PATH="$HOME/.local/bin:$PATH"
 #fi
 
-pip install uv
-
-uv sync --all-extras
+pip install -r requirements.txt -r requirements-dev.txt

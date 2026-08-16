@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")/.."
-uv run --group dev pytest tests/ -v
+pytest tests/ -v

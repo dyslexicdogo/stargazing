@@ -1,3 +1,4 @@
-homeassistant
+homeassistant=2026.2.3
 aiohttp
 skyfield
+astral
