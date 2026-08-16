@@ -27,28 +27,46 @@ silently using a shallower tier than necessary. Which tiers are tried
 intended to back a user-facing "minimum acceptable darkness" config
 option (Phase 6), not hardcoded here.
 
-MOON: skyfield needs an ephemeris file (de421.bsp, ~17MB) downloaded on
-first use and cached locally afterward. This is a new operational
-dependency the integration didn't previously have -- decide before HACS
-packaging whether to bundle the file or rely on first-run download.
+MOON: skyfield needs an ephemeris file (de421.bsp, ~17MB). Rather than
+downloading it on first use, the file is bundled directly in this
+integration's directory (custom_components/stargazing/de421.bsp) and
+loaded via load_file(), which only ever reads a local path -- it has no
+download capability at all, unlike load()/Loader. This is a genuinely
+stronger guarantee than caching a downloaded copy: there's no code path
+here that can ever attempt network access, not even as a fallback.
+Valid through 2053.
+
+Bundling means this file must be committed inside
+custom_components/stargazing/, not just the repo root -- HACS
+"Integration" category repos only download custom_components/ (see
+PROJECT_PRINCIPLES.md gotcha list), so a copy sitting only at the repo
+root would silently not exist for real HACS installs.
+
+EphemerisError wraps load failures (missing/corrupted file) the same
+way client.py wraps HTTP failures in OpenMeteoError, so the coordinator
+can catch it and surface a clean UpdateFailed rather than a raw
+FileNotFoundError.
 
 The ephemeris is loaded LAZILY (on first call to a moon function), not
 at module import time. Loading it eagerly at import time was tried
 first and was a real bug: it meant simply importing this module -- even
-just to use the sun-only darkness window functions -- required network
-access, which broke offline use and test collection for the whole file,
-not just the moon-related tests.
+just to use the sun-only darkness window functions -- required loading
+a 17MB file just to import, which slowed down and complicated test
+collection for the whole file, not just the moon-related tests.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
 from datetime import date as date_type
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import astral.sun as astral_sun
 from astral import Depression, Observer
-from skyfield.api import load, wgs84
+from skyfield.api import load, load_file, wgs84
+
+_EPHEMERIS_PATH = Path(__file__).parent / "de421.bsp"
 
 # Populated on first call to _get_ephemeris(), not at import time -- see
 # module docstring. Cached after that so the (slow) load only happens
@@ -59,11 +77,28 @@ _moon_body = None
 _sun_body = None
 
 
+class EphemerisError(Exception):
+    """Raised when the moon ephemeris can't be loaded (e.g. the bundled
+    file is missing or corrupted). Mirrors OpenMeteoError in client.py
+    -- coordinator code should catch this the same way and surface it
+    as UpdateFailed."""
+
+
 def _get_ephemeris():
     global _timescale, _earth, _moon_body, _sun_body
     if _earth is None:
-        _timescale = load.timescale()
-        ephemeris = load("de421.bsp")
+        try:
+            # builtin=True (the default) uses leap-second/delta-T data
+            # bundled inside skyfield itself, not a download -- confirmed
+            # against the installed skyfield source, not assumed.
+            _timescale = load.timescale()
+            ephemeris = load_file(_EPHEMERIS_PATH)
+        except (OSError, ValueError) as err:
+            raise EphemerisError(
+                f"Could not load bundled moon ephemeris from "
+                f"{_EPHEMERIS_PATH}: {err}. Check that de421.bsp is "
+                "present in custom_components/stargazing/."
+            ) from err
         _earth = ephemeris["earth"]
         _moon_body = ephemeris["moon"]
         _sun_body = ephemeris["sun"]
@@ -152,8 +187,8 @@ def get_darkness_window(
 def _ensure_utc(at: datetime) -> datetime:
     """skyfield's timescale needs a timezone-aware datetime."""
     if at.tzinfo is None:
-        return at.replace(tzinfo=UTC)
-    return at.astimezone(UTC)
+        return at.replace(tzinfo=timezone.utc)
+    return at.astimezone(timezone.utc)
 
 
 def _observe_moon(observer: Observer, at: datetime):
