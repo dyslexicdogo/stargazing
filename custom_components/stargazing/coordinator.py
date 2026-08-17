@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta
 
 import homeassistant.util.dt as dt_util
 from astral import Observer
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -85,6 +86,7 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         client: OpenMeteoClient,
         observer: Observer,
         edges: PlateauEdges,
@@ -93,7 +95,13 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
         tiers: tuple = DARKNESS_TIERS,
         update_interval: timedelta = DEFAULT_UPDATE_INTERVAL,
     ) -> None:
-        super().__init__(hass, _LOGGER, name="stargazing", update_interval=update_interval)
+        super().__init__(
+            hass,
+            _LOGGER,
+            config_entry=config_entry,
+            name="stargazing",
+            update_interval=update_interval,
+        )
         self._client = client
         self._observer = observer
         self._edges = edges

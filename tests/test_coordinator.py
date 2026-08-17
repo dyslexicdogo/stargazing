@@ -15,9 +15,11 @@ import datetime
 
 import pytest
 from astral import Depression, Observer
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.stargazing.astro import DARKNESS_TIERS
 from custom_components.stargazing.client import OpenMeteoError, OpenMeteoHourlyReading
+from custom_components.stargazing.const import DOMAIN
 from custom_components.stargazing.coordinator import (
     StargazingCoordinator,
     determine_night_of,
@@ -85,8 +87,11 @@ WINTER_READINGS = [
 
 
 def make_coordinator(hass, client, tiers=DARKNESS_TIERS):
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
     return StargazingCoordinator(
         hass=hass,
+        config_entry=entry,
         client=client,
         observer=INVERNESS,
         edges=PlateauEdges(),
