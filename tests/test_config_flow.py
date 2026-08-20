@@ -12,7 +12,7 @@ import re
 import pytest
 from aioresponses import aioresponses
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 
 from custom_components.stargazing.client import BASE_URL
 from custom_components.stargazing.const import (
@@ -86,7 +86,7 @@ async def test_invalid_location_stays_on_user_step_with_error(hass):
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {"latitude": 999.0, "longitude": 999.0, "elevation": 0.0},
+            {"latitude": 0.0, "longitude": 0.0, "elevation": 0.0}  # Valid range, API returns 400
         )
 
     assert result["type"] == FlowResultType.FORM
@@ -149,3 +149,74 @@ async def test_no_options_flow_implemented_yet(hass):
 
     with pytest.raises(data_entry_flow.UnknownHandler):
         StargazingConfigFlow.async_get_options_flow(None)
+
+async def test_invalid_latitude_range_shows_field_error(hass):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    
+    with pytest.raises(InvalidData) as exc_info:
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"latitude": 999.0, "longitude": -4.2247, "elevation": 0.0},
+        )
+    
+    assert "latitude" in str(exc_info.value.schema_errors)
+    assert exc_info.value.path == ["latitude"]
+
+
+
+async def test_invalid_longitude_range_shows_field_error(hass):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    
+    with pytest.raises(InvalidData) as exc_info:
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"latitude": 57.4778, "longitude": 999.0, "elevation": 0.0},
+        )
+    
+    assert "longitude" in str(exc_info.value.schema_errors)
+
+async def test_invalid_elevation_range_shows_field_error(hass):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    
+    with pytest.raises(InvalidData) as exc_info:
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"latitude": 57.4778, "longitude": -4.2247, "elevation": 99999.0},
+        )
+    
+    assert "elevation" in str(exc_info.value.schema_errors)
+
+async def test_duplicate_location_aborts(hass):
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+
+        # First flow creates entry
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"latitude": 57.4778, "longitude": -4.2247, "elevation": 10.0},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_PRESET: PRESET_STRICT, CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL_ONLY},
+        )
+        assert result["type"] == FlowResultType.CREATE_ENTRY
+
+        # Second flow with same location should abort
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"latitude": 57.4778, "longitude": -4.2247, "elevation": 10.0},
+        )
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "already_configured"

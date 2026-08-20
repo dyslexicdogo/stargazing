@@ -5,7 +5,8 @@ hand-built fake client rather than aioresponses -- per
 PROJECT_PRINCIPLES.md's stated preference for "minimal hand-built fakes,
 not full mocks, not real network" at the coordinator level. HTTP-level
 testing already lives in test_client.py; these tests are about
-orchestration (filtering, wiring, error propagation), not HTTP.
+orchestration (filtering, wiring, multi-night structure, error
+propagation), not HTTP.
 
 Time is frozen with pytest_freezer so determine_night_of()'s noon
 cutover is deterministic regardless of when the suite actually runs.
@@ -21,6 +22,8 @@ from custom_components.stargazing.astro import DARKNESS_TIERS
 from custom_components.stargazing.client import OpenMeteoError, OpenMeteoHourlyReading
 from custom_components.stargazing.const import DOMAIN
 from custom_components.stargazing.coordinator import (
+    FORECAST_DAYS,
+    NUM_NIGHTS_AHEAD,
     StargazingCoordinator,
     determine_night_of,
 )
@@ -74,15 +77,26 @@ def make_reading(hour_str: str, **overrides) -> OpenMeteoHourlyReading:
     return OpenMeteoHourlyReading(**defaults)
 
 
-# Real astronomical night for Inverness on 2026-01-15/16, confirmed
-# empirically earlier in this project: dusk ~18:29, dawn ~06:22.
-WINTER_READINGS = [
+# Night 0 (Jan15->16) uses exact, empirically-confirmed boundary times
+# from earlier in this project: astronomical dusk ~18:29, dawn ~06:22.
+# Nights 1 and 2 use conservative mid-window hours (not boundary-precise
+# -- winter dusk/dawn shift only a few minutes/day at this latitude in
+# mid-January, so these are safely inside any reasonable window without
+# needing a fresh astral check for each exact date).
+MULTI_NIGHT_READINGS = [
+    # --- Night 0: 2026-01-15 -> 2026-01-16 ---
     make_reading("2026-01-15T17:00"),  # before dusk -- excluded
     make_reading("2026-01-15T19:00"),  # inside window
     make_reading("2026-01-15T23:00"),  # inside window
     make_reading("2026-01-16T02:00"),  # inside window
     make_reading("2026-01-16T06:00"),  # inside window (before ~06:22 dawn)
     make_reading("2026-01-16T07:00"),  # after dawn -- excluded
+    # --- Night 1: 2026-01-16 -> 2026-01-17 ---
+    make_reading("2026-01-16T20:00"),  # inside window
+    make_reading("2026-01-17T01:00"),  # inside window
+    # --- Night 2: 2026-01-17 -> 2026-01-18 ---
+    make_reading("2026-01-17T21:00"),  # inside window
+    make_reading("2026-01-18T03:00"),  # inside window
 ]
 
 
@@ -105,16 +119,14 @@ def make_coordinator(hass, client, tiers=DARKNESS_TIERS):
 def stub_moon_functions(monkeypatch):
     """Coordinator tests verify orchestration (filtering/wiring), not
     astronomical correctness -- that's already covered by test_astro.py.
-    Stubbing these avoids a real skyfield/de421.bsp network dependency
-    here (pytest-homeassistant-custom-component blocks real sockets by
+    Stubbing this avoids a real skyfield/de421.bsp dependency here
+    (pytest-homeassistant-custom-component blocks real sockets by
     default anyway) and keeps these tests fast and focused."""
+    from custom_components.stargazing.astro import MoonPosition
+
     monkeypatch.setattr(
-        "custom_components.stargazing.coordinator.moon_altitude",
-        lambda observer, at: 12.5,
-    )
-    monkeypatch.setattr(
-        "custom_components.stargazing.coordinator.moon_illumination_percent",
-        lambda observer, at: 40.0,
+        "custom_components.stargazing.coordinator.moon_position",
+        lambda observer, at: MoonPosition(altitude=12.5, illumination_percent=40.0),
     )
 
 
@@ -140,22 +152,66 @@ class TestDetermineNightOf:
 
 
 # ---------------------------------------------------------------------------
-# StargazingCoordinator._async_update_data
+# StargazingCoordinator._async_update_data -- multi-night structure
 # ---------------------------------------------------------------------------
-class TestCoordinatorUpdateData:
-    async def test_filters_to_only_hours_inside_the_darkness_window(
+class TestCoordinatorReturnsThreeNights:
+    async def test_returns_num_nights_ahead_entries(self, hass, freezer):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        result = await coordinator._async_update_data()
+
+        assert len(result) == NUM_NIGHTS_AHEAD == 3
+
+    async def test_nights_are_consecutive_starting_from_determined_night(
         self, hass, freezer
     ):
         hass.config.time_zone = "Europe/London"
         freezer.move_to("2026-01-15 20:00:00")
 
-        client = FakeOpenMeteoClient(WINTER_READINGS)
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
         coordinator = make_coordinator(hass, client)
 
         result = await coordinator._async_update_data()
 
-        assert len(result) == 4
-        included_hours = {hs.time.isoformat() for hs in result}
+        assert [n.night_of for n in result] == [
+            datetime.date(2026, 1, 15),
+            datetime.date(2026, 1, 16),
+            datetime.date(2026, 1, 17),
+        ]
+
+    async def test_requests_forecast_days_covering_all_nights(self, hass, freezer):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        await coordinator._async_update_data()
+
+        assert client.last_call_kwargs["forecast_days"] == FORECAST_DAYS
+
+
+# ---------------------------------------------------------------------------
+# Per-night filtering and content
+# ---------------------------------------------------------------------------
+class TestNightlyScoreContent:
+    async def test_first_night_filters_to_only_hours_inside_its_window(
+        self, hass, freezer
+    ):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        result = await coordinator._async_update_data()
+        night_0 = result[0]
+
+        included_hours = {hs.time.isoformat() for hs in night_0.hourly_scores}
         assert included_hours == {
             "2026-01-15T19:00:00",
             "2026-01-15T23:00:00",
@@ -163,13 +219,141 @@ class TestCoordinatorUpdateData:
             "2026-01-16T06:00:00",
         }
 
+    async def test_each_night_has_a_window(self, hass, freezer):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        result = await coordinator._async_update_data()
+
+        for night in result:
+            assert night.window is not None
+
+    async def test_each_hourly_score_has_moon_altitude_and_illumination(
+        self, hass, freezer
+    ):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        result = await coordinator._async_update_data()
+
+        for night in result:
+            for hourly_score in night.hourly_scores:
+                # values come from the stub_moon_functions fixture -- this
+                # test is about wiring, not astronomical correctness
+                assert hourly_score.conditions.moon_altitude == 12.5
+                assert hourly_score.conditions.moon_illumination == 40.0
+
+    async def test_each_hourly_score_has_a_computed_breakdown(self, hass, freezer):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        result = await coordinator._async_update_data()
+
+        for night in result:
+            for hourly_score in night.hourly_scores:
+                assert 0.0 <= hourly_score.breakdown.total <= 100.0
+
+
+# ---------------------------------------------------------------------------
+# NightlyScore.peak_score
+# ---------------------------------------------------------------------------
+class TestPeakScore:
+    async def test_peak_score_matches_max_of_hourly_totals(self, hass, freezer):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
+        coordinator = make_coordinator(hass, client)
+
+        result = await coordinator._async_update_data()
+        night_0 = result[0]
+
+        expected_max = max(hs.breakdown.total for hs in night_0.hourly_scores)
+        assert night_0.peak_score == expected_max
+
+    async def test_peak_score_is_none_when_no_hourly_scores(self, hass, freezer):
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-06-21 20:00:00")
+
+        client = FakeOpenMeteoClient([])
+        coordinator = make_coordinator(
+            hass, client, tiers=(Depression.ASTRONOMICAL, Depression.NAUTICAL)
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert all(n.peak_score is None for n in result)
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation: no darkness window for some/all nights
+# ---------------------------------------------------------------------------
+class TestNoWindowGracefulDegradation:
+    async def test_night_with_no_window_has_empty_scores_not_an_error(
+        self, hass, freezer
+    ):
+        # confirmed empirically: nautical twilight is unreachable at
+        # Inverness's latitude for a stretch of at least a week around
+        # the solstice (June 18-24 all confirmed missing)
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-06-20 20:00:00")
+
+        client = FakeOpenMeteoClient([])
+        coordinator = make_coordinator(
+            hass, client, tiers=(Depression.ASTRONOMICAL, Depression.NAUTICAL)
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert len(result) == NUM_NIGHTS_AHEAD
+        for night in result:
+            assert night.window is None
+            assert night.hourly_scores == []
+
+    async def test_one_bad_night_does_not_abort_other_nights(self, hass, freezer):
+        # night 0 (June 20) has no nautical window; nights 1-2 (May
+        # dates would, but we can't shift dates independently here since
+        # nights are always consecutive) -- this test instead confirms
+        # the coordinator doesn't raise/short-circuit when night 0 fails,
+        # by checking all 3 entries are still present and well-formed
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-06-20 20:00:00")
+
+        client = FakeOpenMeteoClient([])
+        coordinator = make_coordinator(
+            hass, client, tiers=(Depression.ASTRONOMICAL, Depression.NAUTICAL)
+        )
+
+        result = await coordinator._async_update_data()
+
+        assert len(result) == 3
+        assert [n.night_of for n in result] == [
+            datetime.date(2026, 6, 20),
+            datetime.date(2026, 6, 21),
+            datetime.date(2026, 6, 22),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Client call parameters and error handling
+# ---------------------------------------------------------------------------
+class TestClientInteraction:
     async def test_passes_correct_location_and_timezone_to_client(
         self, hass, freezer
     ):
         hass.config.time_zone = "Europe/London"
         freezer.move_to("2026-01-15 20:00:00")
 
-        client = FakeOpenMeteoClient(WINTER_READINGS)
+        client = FakeOpenMeteoClient(MULTI_NIGHT_READINGS)
         coordinator = make_coordinator(hass, client)
 
         await coordinator._async_update_data()
@@ -177,53 +361,6 @@ class TestCoordinatorUpdateData:
         assert client.last_call_kwargs["latitude"] == INVERNESS.latitude
         assert client.last_call_kwargs["longitude"] == INVERNESS.longitude
         assert client.last_call_kwargs["timezone"] == "Europe/London"
-
-    async def test_each_hourly_score_has_a_moon_altitude_and_illumination(
-        self, hass, freezer
-    ):
-        hass.config.time_zone = "Europe/London"
-        freezer.move_to("2026-01-15 20:00:00")
-
-        client = FakeOpenMeteoClient(WINTER_READINGS)
-        coordinator = make_coordinator(hass, client)
-
-        result = await coordinator._async_update_data()
-
-        assert len(result) > 0
-        for hourly_score in result:
-            # values come from the stub_moon_functions fixture -- this
-            # test is about wiring (does the value land in the right
-            # field?), not astronomical correctness
-            assert hourly_score.conditions.moon_altitude == 12.5
-            assert hourly_score.conditions.moon_illumination == 40.0
-
-    async def test_each_hourly_score_has_a_computed_breakdown(self, hass, freezer):
-        hass.config.time_zone = "Europe/London"
-        freezer.move_to("2026-01-15 20:00:00")
-
-        client = FakeOpenMeteoClient(WINTER_READINGS)
-        coordinator = make_coordinator(hass, client)
-
-        result = await coordinator._async_update_data()
-
-        for hourly_score in result:
-            assert 0.0 <= hourly_score.breakdown.total <= 100.0
-
-    async def test_no_darkness_window_returns_empty_list(self, hass, freezer):
-        # summer solstice, restricted to tiers that don't reach civil --
-        # confirmed empirically that neither is achievable at this
-        # latitude/date
-        hass.config.time_zone = "Europe/London"
-        freezer.move_to("2026-06-21 20:00:00")
-
-        client = FakeOpenMeteoClient(WINTER_READINGS)
-        coordinator = make_coordinator(
-            hass, client, tiers=(Depression.ASTRONOMICAL, Depression.NAUTICAL)
-        )
-
-        result = await coordinator._async_update_data()
-
-        assert result == []
 
     async def test_client_error_raises_update_failed(self, hass, freezer):
         hass.config.time_zone = "Europe/London"
@@ -234,7 +371,9 @@ class TestCoordinatorUpdateData:
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
 
-    async def test_empty_readings_returns_empty_list_not_error(self, hass, freezer):
+    async def test_empty_readings_still_returns_three_nights_with_empty_scores(
+        self, hass, freezer
+    ):
         hass.config.time_zone = "Europe/London"
         freezer.move_to("2026-01-15 20:00:00")
 
@@ -243,4 +382,8 @@ class TestCoordinatorUpdateData:
 
         result = await coordinator._async_update_data()
 
-        assert result == []
+        assert len(result) == NUM_NIGHTS_AHEAD
+        for night in result:
+            # windows exist (winter dates), just no readings fell inside them
+            assert night.window is not None
+            assert night.hourly_scores == []

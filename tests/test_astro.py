@@ -1,13 +1,14 @@
 """Tests for astro.py.
 
-No HA imports. The darkness-window tests below run offline against real
-astral computations for Inverness's coordinates. The moon_altitude/
-moon_illumination_percent tests need skyfield's de421.bsp ephemeris file,
-which downloads from NASA on first use and is cached locally after --
-these tests need real network access at least once and were NOT run
-successfully in the sandbox this file was written in (NASA's ephemeris
-server isn't network-reachable there). Run these locally to confirm
-before trusting them; the darkness-window tests were verified.
+No HA imports, no network. The darkness-window tests run offline against
+real astral computations for Inverness's coordinates. The
+moon_altitude/moon_illumination_percent/moon_position tests use
+skyfield's bundled de421.bsp ephemeris (custom_components/stargazing/
+de421.bsp, loaded via load_file()) -- no network access at all, since
+load_file() only ever reads a local path. These need the bundled file to
+actually be present to pass; they were NOT run successfully in the
+sandbox this file was written in (no bundled file exists there). Run
+these locally to confirm; the darkness-window tests were verified.
 """
 
 import datetime
@@ -20,6 +21,7 @@ from custom_components.stargazing.astro import (
     get_darkness_window,
     moon_altitude,
     moon_illumination_percent,
+    moon_position,
 )
 
 INVERNESS = Observer(latitude=57.4778, longitude=-4.2247, elevation=0)
@@ -114,7 +116,7 @@ class TestGetDarknessWindow:
 # ---------------------------------------------------------------------------
 class TestMoonAltitude:
     def test_returns_a_plausible_degree_value(self):
-        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.UTC)
+        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
         altitude = moon_altitude(INVERNESS, at)
         assert -90.0 <= altitude <= 90.0
 
@@ -122,17 +124,17 @@ class TestMoonAltitude:
         # the moon moves across the sky -- altitude at 22:00 and 04:00
         # on the same night should generally differ
         early = moon_altitude(
-            INVERNESS, datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.UTC)
+            INVERNESS, datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
         )
         late = moon_altitude(
-            INVERNESS, datetime.datetime(2026, 1, 16, 4, 0, tzinfo=datetime.UTC)
+            INVERNESS, datetime.datetime(2026, 1, 16, 4, 0, tzinfo=datetime.timezone.utc)
         )
         assert early != late
 
     def test_naive_datetime_is_treated_as_utc(self):
         # _ensure_utc() should make this equivalent to an explicit UTC dt
         naive = datetime.datetime(2026, 1, 15, 22, 0)
-        aware = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.UTC)
+        aware = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
         assert moon_altitude(INVERNESS, naive) == pytest.approx(
             moon_altitude(INVERNESS, aware)
         )
@@ -144,7 +146,7 @@ class TestMoonAltitude:
 # ---------------------------------------------------------------------------
 class TestMoonIlluminationPercent:
     def test_returns_a_percentage_in_range(self):
-        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.UTC)
+        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
         pct = moon_illumination_percent(INVERNESS, at)
         assert 0.0 <= pct <= 100.0
 
@@ -158,10 +160,10 @@ class TestMoonIlluminationPercent:
         # for dates that land nearer a quarter -- this bound covers the
         # whole cycle with some margin for orbital eccentricity.
         early = moon_illumination_percent(
-            INVERNESS, datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.UTC)
+            INVERNESS, datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
         )
         late = moon_illumination_percent(
-            INVERNESS, datetime.datetime(2026, 1, 16, 4, 0, tzinfo=datetime.UTC)
+            INVERNESS, datetime.datetime(2026, 1, 16, 4, 0, tzinfo=datetime.timezone.utc)
         )
         assert early == pytest.approx(late, abs=3.5)
 
@@ -171,9 +173,33 @@ class TestMoonIlluminationPercent:
         # can't reach) -- just confirming the value actually moves
         # rather than being stuck at a constant
         day1 = moon_illumination_percent(
-            INVERNESS, datetime.datetime(2026, 1, 1, 22, 0, tzinfo=datetime.UTC)
+            INVERNESS, datetime.datetime(2026, 1, 1, 22, 0, tzinfo=datetime.timezone.utc)
         )
         day15 = moon_illumination_percent(
-            INVERNESS, datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.UTC)
+            INVERNESS, datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
         )
         assert day1 != pytest.approx(day15, abs=5.0)
+
+
+# ---------------------------------------------------------------------------
+# moon_position -- combined altitude + illumination from one observation.
+# moon_altitude()/moon_illumination_percent() are thin wrappers around
+# this; these tests confirm the combined result matches what calling
+# them separately would give, i.e. the refactor didn't change behavior.
+# ---------------------------------------------------------------------------
+class TestMoonPosition:
+    def test_altitude_matches_standalone_function(self):
+        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
+        position = moon_position(INVERNESS, at)
+        assert position.altitude == moon_altitude(INVERNESS, at)
+
+    def test_illumination_matches_standalone_function(self):
+        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
+        position = moon_position(INVERNESS, at)
+        assert position.illumination_percent == moon_illumination_percent(INVERNESS, at)
+
+    def test_both_values_in_plausible_ranges(self):
+        at = datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc)
+        position = moon_position(INVERNESS, at)
+        assert -90.0 <= position.altitude <= 90.0
+        assert 0.0 <= position.illumination_percent <= 100.0

@@ -67,6 +67,8 @@ from astral import Depression, Observer
 from skyfield.api import load, load_file, wgs84
 
 _EPHEMERIS_PATH = Path(__file__).parent / "de421.bsp"
+_ephemeris_mtime = None  # track file mtime
+
 
 # Populated on first call to _get_ephemeris(), not at import time -- see
 # module docstring. Cached after that so the (slow) load only happens
@@ -85,23 +87,19 @@ class EphemerisError(Exception):
 
 
 def _get_ephemeris():
-    global _timescale, _earth, _moon_body, _sun_body
-    if _earth is None:
+    global _timescale, _earth, _moon_body, _sun_body, _ephemeris_mtime
+    current_mtime = _EPHEMERIS_PATH.stat().st_mtime
+    if _earth is None or current_mtime != _ephemeris_mtime:
+        # file changed or first load
         try:
-            # builtin=True (the default) uses leap-second/delta-T data
-            # bundled inside skyfield itself, not a download -- confirmed
-            # against the installed skyfield source, not assumed.
             _timescale = load.timescale()
             ephemeris = load_file(_EPHEMERIS_PATH)
         except (OSError, ValueError) as err:
-            raise EphemerisError(
-                f"Could not load bundled moon ephemeris from "
-                f"{_EPHEMERIS_PATH}: {err}. Check that de421.bsp is "
-                "present in custom_components/stargazing/."
-            ) from err
+            raise EphemerisError(...)
         _earth = ephemeris["earth"]
         _moon_body = ephemeris["moon"]
         _sun_body = ephemeris["sun"]
+        _ephemeris_mtime = current_mtime
     return _timescale, _earth, _moon_body, _sun_body
 
 # Tried in order: best darkness quality first, falls back only when the
@@ -194,10 +192,12 @@ def _ensure_utc(at: datetime) -> datetime:
 def _observe_moon(observer: Observer, at: datetime):
     """Shared skyfield observation of the moon from a topocentric location.
 
-    Both moon_altitude() and moon_illumination_percent() need this same
-    observation -- factored out so a single call computes both from one
-    consistent geometry rather than two separate skyfield calls that
-    could theoretically drift apart.
+    Used by moon_position() to compute altitude and illumination from a
+    single call. moon_altitude()/moon_illumination_percent() also each
+    call this independently when used alone -- callers needing both
+    values for the same (observer, at), which coordinator.py always
+    does once per scored hour, should use moon_position() instead to
+    avoid computing the same observation twice.
     """
     timescale, earth, moon_body, _sun_body = _get_ephemeris()
     at = _ensure_utc(at)
@@ -210,11 +210,37 @@ def _observe_moon(observer: Observer, at: datetime):
     return location.at(t).observe(moon_body).apparent()
 
 
-def moon_altitude(observer: Observer, at: datetime) -> float:
-    """Moon altitude in degrees above the horizon at a given moment."""
+@dataclass
+class MoonPosition:
+    """Altitude and illumination from a single shared observation."""
+
+    altitude: float  # degrees above horizon
+    illumination_percent: float  # 0-100
+
+
+def moon_position(observer: Observer, at: datetime) -> MoonPosition:
+    """Altitude + illumination together, from one skyfield observation.
+
+    Prefer this over calling moon_altitude() and
+    moon_illumination_percent() separately when both are needed for the
+    same (observer, at) -- calling both separately computes the same
+    underlying topocentric observation twice for no benefit.
+    """
+    _timescale, _earth, _moon_body, sun_body = _get_ephemeris()
     apparent = _observe_moon(observer, at)
     alt, _az, _distance = apparent.altaz()
-    return alt.degrees
+    illumination_percent = apparent.fraction_illuminated(sun_body) * 100.0
+    return MoonPosition(altitude=alt.degrees, illumination_percent=illumination_percent)
+
+
+def moon_altitude(observer: Observer, at: datetime) -> float:
+    """Moon altitude in degrees above the horizon at a given moment.
+
+    Thin wrapper around moon_position() -- prefer that directly if you
+    also need illumination for the same (observer, at), to avoid a
+    redundant second observation.
+    """
+    return moon_position(observer, at).altitude
 
 
 def moon_illumination_percent(observer: Observer, at: datetime) -> float:
@@ -222,12 +248,8 @@ def moon_illumination_percent(observer: Observer, at: datetime) -> float:
     ephemeris-based fraction_illuminated() rather than a phase-based
     approximation.
 
-    Unlike the astral-based version, this needs an Observer (not just a
-    date) since fraction_illuminated() is computed from the actual
-    apparent position, and needs the topocentric observation already
-    computed in _observe_moon() for altitude. Callers should pass the
-    same (observer, at) used for moon_altitude() at that hour.
+    Thin wrapper around moon_position() -- prefer that directly if you
+    also need altitude for the same (observer, at), to avoid a
+    redundant second observation.
     """
-    _timescale, _earth, _moon_body, sun_body = _get_ephemeris()
-    apparent = _observe_moon(observer, at)
-    return apparent.fraction_illuminated(sun_body) * 100.0
+    return moon_position(observer, at).illumination_percent

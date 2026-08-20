@@ -7,6 +7,6 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/dyslexicdogo/stargazing/issues",
-  "requirements": ["aiohttp", "astral>=2.2", "skyfield>=1.42"],
+  "requirements": ["astral>=2.2", "skyfield>=1.42"],
   "version": "0.1.0"
 }

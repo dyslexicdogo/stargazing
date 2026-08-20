@@ -121,3 +121,65 @@ class TestRoundTrip:
         assert asdict(edges) == values["edges"]
         assert asdict(spans) == values["spans"]
         assert asdict(weights) == values["weights"]
+
+
+class TestConfigEntryToScoreConfigDefensive:
+    """Tests that config_entry_to_score_config fails soft (uses defaults)
+    for missing/malformed stored data -- per README fail-soft principle."""
+
+    def test_missing_edges_section_uses_defaults(self):
+        """Entire 'edges' key missing from stored data."""
+        stored = {"spans": {}, "weights": {}}
+        edges, spans, weights = config_entry_to_score_config(stored)
+        # edges should be all defaults
+        assert edges == PlateauEdges()
+
+    def test_missing_spans_section_uses_defaults(self):
+        """Entire 'spans' key missing."""
+        stored = {"edges": {}, "weights": {}}
+        edges, spans, weights = config_entry_to_score_config(stored)
+        assert spans == FalloffSpans()
+
+    def test_missing_weights_section_uses_defaults(self):
+        """Entire 'weights' key missing."""
+        stored = {"edges": {}, "spans": {}}
+        edges, spans, weights = config_entry_to_score_config(stored)
+        assert weights == ScoreWeights()
+
+    def test_completely_empty_stored_data_uses_all_defaults(self):
+        """No 'score_config' dict at all - empty dict input."""
+        edges, spans, weights = config_entry_to_score_config({})
+        assert edges == PlateauEdges()
+        assert spans == FalloffSpans()
+        assert weights == ScoreWeights()
+
+    def test_partial_edges_falls_back_to_defaults(self):
+        """Some edge fields provided, rest should fall back to defaults."""
+        stored = {
+            "edges": {"low_cloud_max": 5.0},  # only one field
+            "spans": {},
+            "weights": {},
+        }
+        edges, spans, weights = config_entry_to_score_config(stored)
+        assert edges.low_cloud_max == 5.0  # provided
+        assert edges.mid_cloud_max == PlateauEdges().mid_cloud_max  # default
+
+    def test_unknown_fields_are_ignored(self):
+        """Extra fields not in dataclass should be silently ignored."""
+        stored = {
+            "edges": {"low_cloud_max": 5.0, "nonexistent_field": 999.0},
+            "spans": {},
+            "weights": {},
+        }
+        edges, spans, weights = config_entry_to_score_config(stored)
+        # Should not raise, unknown field ignored
+        assert edges.low_cloud_max == 5.0
+        assert not hasattr(edges, "nonexistent_field")
+
+    def test_none_section_values_handled(self):
+        """Section explicitly set to None should fall back to defaults."""
+        stored = {"edges": None, "spans": None, "weights": None}
+        edges, spans, weights = config_entry_to_score_config(stored)
+        assert edges == PlateauEdges()
+        assert spans == FalloffSpans()
+        assert weights == ScoreWeights()

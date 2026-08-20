@@ -22,7 +22,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .client import OpenMeteoClient
 from .const import CONF_TWILIGHT_TIER, TWILIGHT_TIER_CHOICES
 from .coordinator import StargazingCoordinator
-from .presets import config_entry_to_score_config
+from .presets import config_entry_to_score_config, get_preset_values
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +66,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -> bool:
-    """Unload a config entry. Nothing to clean up yet -- no platforms,
-    no listeners, no registered resources -- but HA expects this
-    function to exist for reload/unload support."""
+    """Unload a config entry. shuts doww the polling coordinator and removes the runtime data"""
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is not None:
+        await coordinator.async_shutdown()  # stop the polling
     return True
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old config entry data to current version."""
+    if entry.version == 1:
+        # Future migrations go here (e.g., add new fields, rename keys)
+        return True
+    return False

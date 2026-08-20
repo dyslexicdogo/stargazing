@@ -7,6 +7,7 @@ function defined"). These tests exercise that exact path.
 """
 
 import re
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from aioresponses import aioresponses
@@ -25,7 +26,8 @@ from custom_components.stargazing.const import (
 from custom_components.stargazing.coordinator import StargazingCoordinator
 from custom_components.stargazing.presets import get_preset_values
 
-URL_PATTERN = re.compile(rf"^{re.escape(BASE_URL)}.*$")
+# Use regex pattern that matches any query params
+URL_PATTERN = re.compile(rf"^{re.escape(BASE_URL)}")
 
 VALID_PAYLOAD = {
     "hourly": {
@@ -44,8 +46,6 @@ VALID_PAYLOAD = {
 
 
 def make_entry() -> MockConfigEntry:
-    # Same shape config_flow.py actually produces -- see
-    # test_preset_data_matches_get_preset_values in test_config_flow.py
     return MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -61,17 +61,11 @@ def make_entry() -> MockConfigEntry:
 
 @pytest.fixture(autouse=True)
 def stub_moon_functions(monkeypatch):
-    # Same rationale as test_coordinator.py: this test is about wiring
-    # (does setup actually produce a running coordinator?), not
-    # astronomical correctness -- already covered by test_astro.py.
-    # Also avoids needing the bundled ephemeris file in this sandbox.
+    from custom_components.stargazing.astro import MoonPosition
+
     monkeypatch.setattr(
-        "custom_components.stargazing.coordinator.moon_altitude",
-        lambda observer, at: 12.5,
-    )
-    monkeypatch.setattr(
-        "custom_components.stargazing.coordinator.moon_illumination_percent",
-        lambda observer, at: 40.0,
+        "custom_components.stargazing.coordinator.moon_position",
+        lambda observer, at: MoonPosition(altitude=12.5, illumination_percent=40.0),
     )
 
 
@@ -83,16 +77,7 @@ async def test_setup_entry_creates_and_starts_coordinator(hass, freezer):
     entry.add_to_hass(hass)
 
     with aioresponses() as mocked:
-        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD)
-        # Goes through HA's real setup path (NOT_LOADED -> SETUP_IN_PROGRESS
-        # -> LOADED), rather than calling async_setup_entry directly --
-        # DataUpdateCoordinator.async_config_entry_first_refresh() checks
-        # that the entry is actually in SETUP_IN_PROGRESS state (another
-        # report_usage deprecation, breaks_in_ha_version=2025.11, same
-        # category as the config_entry=None issue fixed earlier). Calling
-        # async_setup_entry directly skips HA's real state transitions
-        # entirely, so MockConfigEntry.add_to_hass() alone leaves the
-        # entry at its default state and silently violates this.
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
         result = await hass.config_entries.async_setup(entry.entry_id)
 
     assert result is True
@@ -110,15 +95,15 @@ async def test_setup_entry_coordinator_has_scored_data_after_first_refresh(
     entry.add_to_hass(hass)
 
     with aioresponses() as mocked:
-        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD)
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
         await hass.config_entries.async_setup(entry.entry_id)
 
-    # both readings (20:00, 21:00) fall inside a January Inverness
-    # darkness window -- confirms the coordinator actually ran, not just
-    # that it was constructed
     assert entry.runtime_data.data is not None
-    assert len(entry.runtime_data.data) == 2
-    assert entry.runtime_data.data[0].breakdown.total >= 0.0
+    assert len(entry.runtime_data.data) == 3
+
+    night_0 = entry.runtime_data.data[0]
+    assert len(night_0.hourly_scores) == 2
+    assert night_0.hourly_scores[0].breakdown.total >= 0.0
 
 
 async def test_unload_entry_returns_true(hass):
@@ -128,3 +113,50 @@ async def test_unload_entry_returns_true(hass):
     result = await async_unload_entry(hass, entry)
 
     assert result is True
+
+
+async def test_unload_entry_shuts_down_coordinator(hass, freezer):
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+        assert result is True
+
+    coordinator = entry.runtime_data
+
+    # The coordinator has no listeners yet (no sensor.py exists), so HA's
+    # DataUpdateCoordinator never arms its polling timer (_unsub_refresh
+    # stays None). What we actually need to verify is the async_shutdown()
+    # fix in __init__.py -- that unload stops the (potentially polling)
+    # coordinator instead of leaving it orphaned.
+    with patch.object(coordinator, "async_shutdown", AsyncMock()) as mock_shutdown:
+        result = await async_unload_entry(hass, entry)
+
+    assert result is True
+    mock_shutdown.assert_awaited_once()
+
+
+
+async def test_async_migrate_entry_returns_true_for_v1(hass):
+    """Migration stub returns True for version 1 entries."""
+    from custom_components.stargazing import async_migrate_entry
+    from homeassistant.config_entries import ConfigEntry
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain="stargazing", version=1, data={})
+    result = await async_migrate_entry(hass, entry)
+    assert result is True
+
+async def test_async_migrate_entry_false_for_unknown_version(hass):
+    """Migration returns False for future/unknown versions."""
+    from custom_components.stargazing import async_migrate_entry
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain="stargazing", version=999, data={})
+    result = await async_migrate_entry(hass, entry)
+    assert result is False

@@ -50,7 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 class StargazingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handles the initial setup wizard: location, then preset + tier."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
@@ -66,6 +66,9 @@ class StargazingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             if valid:
                 self._data.update(user_input)
+                unique_id = f"{user_input[CONF_LATITUDE]:.4f},{user_input[CONF_LONGITUDE]:.4f}"
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
                 return await self.async_step_preset()
             errors["base"] = "cannot_connect"
 
@@ -73,15 +76,16 @@ class StargazingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(
                     CONF_LATITUDE, default=self.hass.config.latitude
-                ): vol.Coerce(float),
+                ): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
                 vol.Required(
                     CONF_LONGITUDE, default=self.hass.config.longitude
-                ): vol.Coerce(float),
+                ): vol.All(vol.Coerce(float), vol.Range(min=-180, max=180)),
                 vol.Optional(
                     CONF_ELEVATION, default=self.hass.config.elevation
-                ): vol.Coerce(float),
+                ): vol.All(vol.Coerce(float), vol.Range(min=-500, max=9000)),
             }
         )
+
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     async def async_step_preset(

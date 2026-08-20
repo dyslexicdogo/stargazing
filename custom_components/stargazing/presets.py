@@ -102,11 +102,26 @@ def config_entry_to_score_config(
     data: dict,
 ) -> tuple[PlateauEdges, FalloffSpans, ScoreWeights]:
     """Reverse of get_preset_values() -- reconstructs the three score.py
-    dataclasses from a config entry's stored data dict. Used wherever the
-    coordinator is actually built (integration setup, not part of this
-    phase, but paired here so that wiring isn't a dangling TODO)."""
+    dataclasses from a config entry's stored data dict. Missing keys/fields
+    fall back to defaults (fail-soft per README principle)."""
+    # Helper: merge stored dict with dataclass defaults
+    def merge_with_defaults(stored: dict | None, defaults: dict) -> dict:
+        if not stored:
+            return defaults
+        # Only keep known fields, merge with defaults
+        known_stored = {k: v for k, v in stored.items() if k in defaults}
+        return {**defaults, **known_stored}
+
+    edges_defaults = {f.name: f.default for f in fields(PlateauEdges)}
+    spans_defaults = {f.name: f.default for f in fields(FalloffSpans)}
+    weights_defaults = {f.name: f.default for f in fields(ScoreWeights)}
+
+    edges_data = merge_with_defaults(data.get("edges"), edges_defaults)
+    spans_data = merge_with_defaults(data.get("spans"), spans_defaults)
+    weights_data = merge_with_defaults(data.get("weights"), weights_defaults)
+
     return (
-        PlateauEdges(**data["edges"]),
-        FalloffSpans(**data["spans"]),
-        ScoreWeights(**data["weights"]),
+        PlateauEdges(**edges_data),
+        FalloffSpans(**spans_data),
+        ScoreWeights(**weights_data),
     )

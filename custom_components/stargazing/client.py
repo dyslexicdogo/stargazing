@@ -15,6 +15,7 @@ jet_stream_wind_speed in m/s but wind_speed in km/h.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -103,10 +104,10 @@ class OpenMeteoClient:
                         f"Open-Meteo returned HTTP {response.status}: {body}"
                     )
                 payload = await response.json()
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise OpenMeteoError(f"Failed to reach Open-Meteo: {err}") from err
 
-        if "error" in payload and payload["error"]:
+        if payload.get("error"):
             raise OpenMeteoError(
                 f"Open-Meteo API error: {payload.get('reason', 'unknown reason')}"
             )

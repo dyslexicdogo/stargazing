@@ -1,9 +1,27 @@
 """DataUpdateCoordinator for stargazing.
 
 Thin orchestration glue only, per PROJECT_PRINCIPLES.md: fetch weather,
-determine tonight's darkness window, filter to hours inside it, attach
-moon position, score each hour. No business logic lives here -- that's
-client.py (API), astro.py (windows/moon), and score.py (scoring).
+determine darkness windows for the next few nights, filter to hours
+inside each, attach moon position, score each hour. No business logic
+lives here -- that's client.py (API), astro.py (windows/moon), and
+score.py (scoring).
+
+MULTI-NIGHT: computes NUM_NIGHTS_AHEAD (3) consecutive nights' worth of
+scores in one poll, not just tonight's. This backs two different UI
+needs: a 3-day overview card (peak score per night, mirroring
+sun_bathing's pattern) and a current-conditions detail card (the
+currently-active hour's full ScoreBreakdown, when one exists). A single
+Open-Meteo call covers all 3 nights -- FORECAST_DAYS is set generously
+enough to include the last night's early-morning dawn spillover into the
+following calendar day.
+
+Nights are independent: if one night has no darkness window at all
+(e.g. summer solstice with strict tiers configured), that night's entry
+just has an empty hourly_scores list and peak_score of None -- it does
+NOT abort scoring for the other nights, since they may well have valid
+windows even when one doesn't (confirmed empirically: nautical twilight
+disappears for roughly a week around the solstice at Inverness's
+latitude, not the whole summer).
 
 TIMEZONE HANDLING -- the one genuinely tricky part of this file: astral
 (used in astro.py) returns tz-aware datetimes, but Open-Meteo's response
@@ -32,10 +50,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .astro import (
     DARKNESS_TIERS,
+    DarknessWindow,
     EphemerisError,
     get_darkness_window,
-    moon_altitude,
-    moon_illumination_percent,
+    moon_position,
 )
 from .client import OpenMeteoClient, OpenMeteoError
 from .score import (
@@ -51,15 +69,47 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_UPDATE_INTERVAL = timedelta(minutes=30)
 
+# How many consecutive nights to score per poll -- backs the 3-day
+# overview card (tonight / tomorrow night / night after).
+NUM_NIGHTS_AHEAD = 3
+
+# Covers NUM_NIGHTS_AHEAD full nights including the last night's dawn,
+# which can spill into the following calendar day. With NUM_NIGHTS_AHEAD
+# = 3 and "tonight" potentially already being "yesterday" (per
+# determine_night_of()'s before-noon case), the furthest possible dawn
+# is up to 4 calendar days out from the API call -- 4 gives safe margin.
+FORECAST_DAYS = 4
+
 
 @dataclass
 class HourlyScore:
-    """One hour's raw conditions plus its computed score breakdown --
-    what the coordinator ultimately hands to entities."""
+    """One hour's raw conditions plus its computed score breakdown."""
 
     time: datetime
     conditions: HourlyConditions
     breakdown: ScoreBreakdown
+
+
+@dataclass
+class NightlyScore:
+    """One night's full scoring result: its darkness window (if any),
+    every scored hour within it, and a peak-score summary for quick
+    display (e.g. one row in a 3-day overview card).
+
+    window and hourly_scores are both None/empty (not an error) when no
+    darkness window exists for this night under the configured tiers --
+    see module docstring.
+    """
+
+    night_of: date
+    window: DarknessWindow | None
+    hourly_scores: list[HourlyScore]
+
+    @property
+    def peak_score(self) -> float | None:
+        if not self.hourly_scores:
+            return None
+        return max(hs.breakdown.total for hs in self.hourly_scores)
 
 
 def determine_night_of(now: datetime) -> date:
@@ -79,9 +129,9 @@ def determine_night_of(now: datetime) -> date:
     return now.date()
 
 
-class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
+class StargazingCoordinator(DataUpdateCoordinator[list[NightlyScore]]):
     """Fetches weather + astronomical data and produces per-hour scores
-    for tonight's (or this early morning's) darkness window."""
+    for the next NUM_NIGHTS_AHEAD nights' darkness windows."""
 
     def __init__(
         self,
@@ -109,11 +159,33 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
         self._weights = weights
         self._tiers = tiers
 
-    async def _async_update_data(self) -> list[HourlyScore]:
+    async def _async_update_data(self) -> list[NightlyScore]:
         timezone_str = str(self.hass.config.time_zone)
         now = dt_util.now()
-        night_of = determine_night_of(now)
+        first_night = determine_night_of(now)
 
+        try:
+            readings = await self._client.async_get_hourly_forecast(
+                latitude=self._observer.latitude,
+                longitude=self._observer.longitude,
+                forecast_days=FORECAST_DAYS,
+                timezone=timezone_str,
+            )
+        except OpenMeteoError as err:
+            raise UpdateFailed(f"Failed to fetch Open-Meteo forecast: {err}") from err
+
+        nightly_scores: list[NightlyScore] = []
+        for offset in range(NUM_NIGHTS_AHEAD):
+            night_of = first_night + timedelta(days=offset)
+            nightly_scores.append(
+                self._score_one_night(night_of, readings, timezone_str)
+            )
+
+        return nightly_scores
+
+    def _score_one_night(
+        self, night_of: date, readings: list, timezone_str: str
+    ) -> NightlyScore:
         window = get_darkness_window(
             self._observer, night_of, tzinfo=timezone_str, tiers=self._tiers
         )
@@ -125,16 +197,7 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
                 night_of,
                 self._tiers,
             )
-            return []
-
-        try:
-            readings = await self._client.async_get_hourly_forecast(
-                latitude=self._observer.latitude,
-                longitude=self._observer.longitude,
-                timezone=timezone_str,
-            )
-        except OpenMeteoError as err:
-            raise UpdateFailed(f"Failed to fetch Open-Meteo forecast: {err}") from err
+            return NightlyScore(night_of=night_of, window=None, hourly_scores=[])
 
         # See module docstring: window bounds are tz-aware, reading times
         # are naive. Strip to naive local time for comparison.
@@ -152,8 +215,7 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
             reading_time_aware = reading.time.replace(tzinfo=window.start.tzinfo)
 
             try:
-                altitude = moon_altitude(self._observer, reading_time_aware)
-                illumination = moon_illumination_percent(self._observer, reading_time_aware)
+                position = moon_position(self._observer, reading_time_aware)
             except EphemerisError as err:
                 raise UpdateFailed(f"Failed to compute moon position: {err}") from err
 
@@ -165,8 +227,8 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
                 dew_point=reading.dew_point,
                 visibility=reading.visibility,
                 jet_stream_wind_speed=reading.jet_stream_wind_speed,
-                moon_illumination=illumination,
-                moon_altitude=altitude,
+                moon_illumination=position.illumination_percent,
+                moon_altitude=position.altitude,
                 precipitation_probability=reading.precipitation_probability,
                 wind_speed=reading.wind_speed,
             )
@@ -177,4 +239,4 @@ class StargazingCoordinator(DataUpdateCoordinator[list[HourlyScore]]):
                 HourlyScore(time=reading.time, conditions=conditions, breakdown=breakdown)
             )
 
-        return hourly_scores
+        return NightlyScore(night_of=night_of, window=window, hourly_scores=hourly_scores)
