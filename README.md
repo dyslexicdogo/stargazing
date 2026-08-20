@@ -1,158 +1,337 @@
-# Stargazing HA Integration — Project Principles
- 
-Scaffolded from lessons learned building `sun_bathing`
-(https://github.com/dyslexicdogo/sun_bathing). This document is meant to be
-pasted into a fresh chat session to carry that project's hard-won lessons
-forward without re-learning them.
- 
+# 🔭 Stargazing
+
+A Home Assistant custom integration that scores hourly stargazing conditions
+using [Open-Meteo](https://open-meteo.com/) weather data — tuned for places
+where dark skies are worth checking before you drag a telescope outside
+(built with Scotland's weather in mind).
+
+Inspired by the [Clear Outside](https://clearoutside.com/) astronomy weather
+site and the
+[AstroWeather](https://github.com/mawinkler/astroweather) integration.
+Unlike fixed daytime windows, stargazing windows are **dynamic** — tied to
+the actual astronomical dusk/dawn for your location and season.
+
+> **Status:** Phases 1–8 of the build roadmap are complete (scoring, API
+> client, astronomical windows, coordinator, config flow, sensors, full
+> integration tests). Phase 9 — a graphical 3-night forecast card and a
+> current-conditions card — is in progress. See [Roadmap](#roadmap).
+
 ---
- 
-## Project concept
- 
-A Home Assistant custom integration scoring stargazing conditions,
-inspired by the "Clear Outside" astronomy weather site. Unlike
-`sun_bathing`'s fixed daytime windows, stargazing windows are **dynamic**
-— tied to actual astronomical dusk/dawn for the location and season
-(important given how much daylight hours swing in Scotland).
- 
-### Scoring factors (richer than sun_bathing's 6)
- 
-- Total cloud cover
-- Low / mid / high cloud cover (separately — low cloud is usually most
-  disruptive; high cirrus can be thin enough to partially see through)
-- Visibility
-- Fog %
-- Dew point vs. temperature (dew risk on optics)
-- Relative humidity (dew risk + atmospheric "seeing" quality)
-- Surface pressure (rising = often clearing; falling = weather moving in)
-- Ozone (rough transparency proxy, as Clear Outside uses it)
-- Precipitation / precipitation probability
-- Wind speed (telescope stability)
-- Apparent temperature (comfort)
-- Moon phase / illumination (bright moon washes out faint objects)
-### Data sources (researched, not yet fully verified in code)
- 
-- **Open-Meteo** (same provider as sun_bathing) covers: cloud cover
-  (total/low/mid/high), visibility, dew point, relative humidity, surface
-  pressure, precipitation, wind speed, apparent temperature — all in the
-  standard hourly forecast endpoint.
-- **Open-Meteo Air Quality API** (separate endpoint, same provider) —
-  needed for ozone.
-- **Fog %** — not directly available; likely approximate from low
-  visibility + high humidity rather than a dedicated field.
-- **Moon phase** — Home Assistant's built-in `moon` integration
-  (`sensor.moon`) gives 8 discrete phases (new_moon, waxing_crescent,
-  full_moon, etc.), no percentage. If numeric illumination % is wanted
-  instead, that needs the `astral` library directly (already a dependency
-  of HA core, confirmed present in a working devcontainer — no new pip
-  install required) rather than HA's built-in moon sensor.
-- **Astronomical dusk/dawn** — HA's `sun.dawn`/`sun.dusk` **triggers**
-  natively support a `type: astronomical` option (18° below horizon,
-  "sky fully dark"), confirmed via official HA docs. These are trigger
-  definitions, not directly-readable entity attributes — the underlying
-  calculation is likely exposed via a helper function
-  (`homeassistant.helpers.sun.get_astral_event_date(hass, "astronomical_dusk")`
-  or similar — **verify the exact function name/signature/import path
-  against the actual installed HA core version before writing code
-  against it**, rather than assuming from this note).
-### Open design decisions still to make
- 
-- 8-phase discrete moon vs. numeric illumination % (trade-off: simplicity
-  vs. precision — discrete needs no `astral` calls, percentage does)
-- Whether to include ozone from day one or defer it
-- Exact scoring weights/formula per factor (likely reuse sun_bathing's
-  centered soft-gradient approach, but with more factors to balance)
----
- 
-## Learning-by-doing: phase sequence
- 
-1. **Environment** — devcontainer, `scripts/setup`/`scripts/develop`,
-   confirm a skeleton integration loads in HA before anything else
-2. **Pure scoring logic first** — dataclasses + `calculate_score()`
-   equivalent, zero HA imports, unit-testable in complete isolation
-   before any API/HA plumbing exists at all
-3. **Dumb API client** — Open-Meteo (+ Air Quality endpoint if ozone is
-   included) wrapper, no domain knowledge, tested with `aioresponses`
-4. **Astronomical window calculation** — the genuinely new piece this
-   project needs; build and test dusk/dawn + moon phase lookup as its
-   own isolated unit before wiring it into a coordinator
-5. **Coordinator** — fetch + filter + combine weather data with the
-   dynamic window boundaries
-6. **Config flow** — location, thresholds, **presets from day one**
-   (rather than bolting them on later, as happened in sun_bathing)
-7. **Sensors** — entities exposing scores + attributes
-8. **Full integration test** — real `hass`, real config entry, confirm
-   entities land correctly
-9. **Lovelace card** — built inside `custom_components/<domain>/www/`
-   **from the start**, never at the repo root
-10. **Options flow with sections** — thresholds/ranges/weights/
-    notifications, built with collapsible sections from day one
-11. **Notifications + HACS packaging** — same proven pattern
----
- 
-## Design principles carried forward from sun_bathing
- 
-### Separation of concerns, strictly enforced
-- API client knows *only* how to talk to the API — zero domain logic,
-  zero knowledge of "windows" or "scoring"
-- Scoring logic has *zero* HA imports — pure, fast, trivially
-  unit-testable
-- Coordinator is thin orchestration glue only — fetch, filter, cache; no
-  business logic lives here
-- One source of truth for shared config (presets, thresholds) — never
-  redefine the same data in two files (sun_bathing's `presets.py` pattern)
-### Test discipline
-- Every new piece of logic gets a test *before* moving to the next piece,
-  using minimal hand-built fakes (not full mocks, not real network) — the
-  single most valuable habit from sun_bathing
-- Exception: pure UI/UX flow work (config flow screens, card visuals) is
-  fine to verify manually first, then backfill tests once the design has
-  settled — testing broken/unsettled UI first just means debugging tests
-  instead of debugging the UI
-### Verify before coding, especially for HA APIs
-- Never assume an HA API signature/behavior from memory or a tutorial —
-  check the actual installed version's source, or search for current
-  documentation, *before* writing code around it
-- This one habit would have saved real time on sun_bathing's
-  `StaticPathConfig`, `OptionsFlow.config_entry`, and today's
-  astral/sun-trigger research
-- For anything with a **severe failure mode** (data loss, integration-wide
-  crash) — research thoroughly, confirm the fix/behavior is actually
-  shipped in the target HA version, and test cautiously with a backup,
-  before it ever touches a real instance (see: sun_bathing's Lovelace
-  resource-wiping bug investigation, home-assistant/core#165767)
-### Defensive parsing for anything user-configurable
-- Any string/value a user can type into a config flow should fail *soft*
-  with a sensible fallback, never crash the whole integration's setup
-  over one bad field (sun_bathing's `notify_time` crash lesson)
-### Idempotency for anything that runs on every reload
-- Scheduled tasks, registered resources, listeners — always guard against
-  duplicating on every restart/reload, and always clean up via
-  `entry.async_on_unload`
-### Keep a living project doc from day one
-- Update `project_summary.md` as you go, right after each real bug/lesson
-  — cheaper to write two sentences immediately than reconstruct the story
-  weeks later (as had to be done retroactively for sun_bathing)
----
- 
-## Known HA API gotchas to remember (sun_bathing history)
- 
-- `hass.http.async_register_static_paths()` wants a list of
-  `StaticPathConfig` **objects**, not plain dicts
-- `OptionsFlow.config_entry` is a **read-only property** in current HA
-  core — don't assign it in `__init__`; the base class populates it
-  automatically
-- `async_track_time_change`'s callback should be a plain `async def`
-  function — wrapping it in `hass.async_create_task(...)` via a lambda
-  triggers a thread-safety violation
-- Custom Lovelace cards **must** live inside
-  `custom_components/<domain>/www/`, never the repo root — HACS
-  "Integration" category repos only download `custom_components/`
-- `asyncio_mode = auto` (not `strict`) needed in `pytest.ini` for
-  `pytest-homeassistant-custom-component`'s `hass` fixture to work
-- `pythonpath = .` may be needed in `pytest.ini` for `custom_components`
-  imports to resolve from `tests/`, depending on pytest/dependency
-  versions
-- PyPI's `homeassistant` package can lag behind HA's dated Core/HAOS
-  releases by weeks — always confirm actual installed versions on both
-  dev and real instances rather than assuming they match
+
+## How it works
+
+```
+Open-Meteo API (hourly forecast)
+        ↓
+client.py — dumb aiohttp wrapper, zero domain knowledge
+        ↓
+coordinator.py — polls every 30 min, combines weather with the
+        dynamically-computed darkness windows (dusk→dawn)
+        ↓
+score.py — pure, zero-HA-imports scoring: 9 factors, each 0–100,
+        weighted into a total per hour (higher = better)
+        ↓
+sensor.py — 4 sensors (3 night forecasts + current conditions)
+        ↓
+Lovelace cards (custom:stargazing-forecast-card,
+        custom:stargazing-current-card) — in progress
+```
+
+- **Darkness windows** are computed from real astronomical dusk/dawn
+  (`astral`), so a night's usable hours change with the season and your
+  location/elevation — no fixed 10am–5pm grid here.
+- **Moon illumination** (bright moon washes out faint objects) comes from
+  `skyfield` + a bundled ephemeris (`de421.bsp`), reported as numeric
+  illumination %.
+- Each scored hour is a **0–100 score** (higher = better), with the
+  nine factor sub-scores exposed so you can see *why* a night scored
+  what it did.
+
+## Features
+
+**Built today:**
+- Two-step config flow — location (defaults to your HA location) then a
+  preset + twilight-tier pick, with presets available **from day one**
+- Three scoring presets: Strict / Balanced / Relaxed
+- Three twilight tiers: Astronomical-only / Nautical-minimum /
+  Civil-minimum
+- Four sensors: tonight, tomorrow night, night+2 peaks, plus current
+  conditions
+- Current-conditions sensor rolls over at each local hour boundary —
+  it never shows the previous hour's score between 30-minute polls
+- 137 passing tests across the client, scoring, windows, coordinator,
+  config flow, and sensors
+
+**In progress (Phase 9):**
+- `custom:stargazing-forecast-card` — a graphical 3-night score-over-time
+  chart
+- `custom:stargazing-current-card` — the active hour at a glance with a
+  "next best hour" fallback
+
+**Planned:**
+- Options flow (edit preset/tier after setup, collapsible sections)
+- Notifications + HACS packaging
+
+## Scoring
+
+Each hour in a darkness window is scored 0–100 from nine weighted factors
+(higher = better). Raw values at or inside the plateau edge score ~50 and
+better; conditions worse than that fall off via a soft gradient.
+
+| Factor | What matters | Perfect at/under |
+|---|---|---|
+| Low cloud | Most disruptive to a dark sky | ≤ 10% |
+| Mid cloud | — | ≤ 20% |
+| High cloud | Cirrus is often thin — generous ceiling | ≤ 40% |
+| Dew-point spread | Temp minus dew point; small spread = dew/fog on optics | ≥ 4 °C |
+| Visibility | Seeing clarity | ≥ 20 km |
+| Jet-stream wind (~300 hPa) | High-altitude turbulence (seeing proxy) | ≤ 20 m/s |
+| Moon illumination | Bright moon washes out faint objects | ≤ 10% |
+| Precipitation probability | — | ≤ 5% |
+| Wind speed (10 m) | Telescope stability | ≤ 10 km/h |
+
+### Presets
+
+| Preset | Mood |
+|---|---|
+| **Balanced** | The reasoned baseline — `score.py` defaults |
+| **Strict** | Half the "perfect" zone, steeper falloff — picky nights only |
+| **Relaxed** | Almost twice the "perfect" zone, gentler falloff — forgive the Scottish weather |
+
+Presets are derived by systematic scaling from the single balanced
+baseline (not hand-picked numbers), so they're honest about being
+unvalidated against real nights and cheap to re-tune later. Presets tune
+how *strict* you are; per-factor *weights* stay the same across presets.
+
+### Twilight tiers
+
+| Tier | Darkness definition |
+|---|---|
+| Astronomical only | Sun below −18° (sky fully dark) |
+| Nautical minimum | Includes nautical twilight (−12°) |
+| Civil minimum | Includes civil twilight (−6°) — longest windows |
+
+## Requirements
+
+- **Home Assistant Core 2026.2.3 or later** (the version the integration
+  is developed and tested against — confirm the PyPI `homeassistant`
+  package matches your real instance; PyPI can lag behind HAOS releases).
+- `astral>=2.2` and `skyfield>=1.42` are declared in the manifest and
+  installed automatically.
+
+## Installation
+
+> HACS packaging ships in Phase 11 — until then, install manually.
+
+### Manual
+
+1. Copy `custom_components/stargazing` into your Home Assistant
+   `config/custom_components/` folder (keep the bundled `de421.bsp`
+   ephemeris — it's required, ~16 MB).
+2. Restart Home Assistant.
+
+### HACS (once packaged)
+
+1. HACS → Integrations → ⋮ → **Custom repositories** → add
+   `https://github.com/dyslexicdogo/stargazing` as an **Integration**.
+2. Search for **Stargazing** and install.
+3. Restart Home Assistant.
+
+## Setup
+
+1. Go to **Settings → Devices & Services → Add Integration**
+2. Search for **Stargazing**
+3. **Step 1 — Location**: latitude/longitude/elevation, pre-filled with
+   your Home Assistant location
+4. **Step 2 — Preset & twilight tier**: pick Strict/Balanced/Relaxed and
+   how dark "dark enough" must be
+
+You'll end up with four sensors:
+`sensor.stargazing_tonight`, `sensor.stargazing_tomorrow_night`,
+`sensor.stargazing_in_two_nights`, and
+`sensor.stargazing_current_conditions`.
+
+## Sensors
+
+| Entity | State | Notable attributes |
+|---|---|---|
+| `sensor.stargazing_tonight` | Best (peak) score tonight, 0–100 | `night_of`, `window_start`, `window_end`, `twilight_tier`, `hourly_scores_count`, `forecast`¹ |
+| `sensor.stargazing_tomorrow_night` | Peak score tomorrow night | same as above |
+| `sensor.stargazing_in_two_nights` | Peak score in two nights | same as above |
+| `sensor.stargazing_current_conditions` | Active hour's total score, or `unknown` outside a scored window | `time`, the 9 factor sub-scores, `upcoming`² |
+
+¹ `forecast` — the full per-hour breakdown for that night: one dict per
+scored hour with `time`, `score`, and all nine factor sub-scores. This is
+what the forecast card renders. *(Ships with the Phase 9 cards.)*
+
+² `upcoming` — the future scored hours across all three nights
+(`time`, `score`, `night_of`), used by the current-conditions card's
+"next best hour" fallback. *(Ships with the Phase 9 cards.)*
+
+## Lovelace cards (Phase 9 — in progress)
+
+Two cards are being built, designed around one principle: the overview
+shows *only scores* (no parameter walls), and the nine factors appear
+on demand for the hour you care about.
+
+### `custom:stargazing-forecast-card` — graphical 3-night forecast
+
+```
+┌───────────────────────────────────────────────────────────┐
+│  Stargazing Forecast · Wed 15 – Fri 17 Jan                │
+│                                                           │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │ 100 ·                                              │  │
+│  │     ·     Tonight        Tomorrow      Night +2     │  │
+│  │     ·       78●            72●            ●61       │  │
+│  │  70 ·      ●   ● ●●     ●    ●  ●      ●   ●       │  │
+│  │     ·     ●  ●   ●   ●  ●  ●  ●  ●    ●    ●       │  │
+│  │     ·    ● ●  ●  ●  ●  ●  ●   ●  ●  ● ●    ●       │  │
+│  │  40 ·   ●    ● ●  ●  ●   ●  ●   ●  ●   ●    ●      │  │
+│  │     ·                                                  │  │
+│  │  0 ────────────────────────────────────────────────   │  │
+│  │  20:00   00:00   04:00  20:00   00:00  20:00   00:00 │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                                                           │
+│  Tonight       20:12–04:47 · peak 78  ● (tap point)       │
+│  Tomorrow N.   20:10–04:45 · peak 72                     │
+│  Night +2      20:08–04:40 · peak 61                     │
+│  ──────────────────────────────────────────────────────   │
+│  Selected: 21:00 · score 78                               │
+│  ☁ Low 82 ☁ Mid 74 ☁ High 90 👁 Vis 71 ✈ Jet 68          │
+│  🌙 Moon 30 💧 Precip 85 💨 Wind 72 ☀ Dew 65              │
+└───────────────────────────────────────────────────────────┘
+```
+
+- One chart, all three nights, on a shared time axis — total score only.
+- **Tap a point** to see that hour's nine-factor breakdown below the chart
+  (defaults to tonight's peak).
+- Nights without a darkness window render dimmed with a "no darkness
+  window" note.
+
+```yaml
+type: custom:stargazing-forecast-card
+# optional: entity_tonight / entity_tomorrow / entity_night2 overrides
+```
+
+### `custom:stargazing-current-card` — current conditions
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ ☾ Current Conditions            now · 21:00                │
+│  ┌─────────────┐   ☁ Low 82   ☁ Mid 74   ☁ High 90        │
+│  │     78      │   👁 Vis 71   ✈ Jet 68   🌙 Moon 30%      │
+│  │   SCORE     │   💧 Precip 85 💨 Wind 72 ☀ Dew 65        │
+│  └─────────────┘                                          │
+│  Window 20:12–04:47 · every 30 min                        │
+│                                                           │
+│  ⚠ unknown: "Come back later — best upcoming hour          │
+│    21:00 tonight (78)"                                    │
+│  ⚠ none upcoming: "No usable window in the next 3 nights"  │
+└───────────────────────────────────────────────────────────┘
+```
+
+- Active hour → big score + the nine factors + the current darkness window.
+- Outside a scored hour → "come back later" with the **best upcoming hour
+  across all three nights**; if none exists, "No usable window in the next
+  3 nights."
+
+```yaml
+type: custom:stargazing-current-card
+# optional: entity override
+```
+
+### Resources
+
+Both cards register themselves as Lovelace resources automatically once
+the integration is set up. If you manage dashboards in **YAML mode**,
+Lovelace's resource collection isn't available — add the resources
+manually instead:
+
+```yaml
+resources:
+  - url: /stargazing/stargazing-forecast-card.js
+    type: module
+  - url: /stargazing/stargazing-current-card.js
+    type: module
+```
+
+## Roadmap
+
+| # | Phase | Status |
+|---|---|---|
+| 1 | Environment / scripts / skeleton loads | ✅ |
+| 2 | Pure scoring logic (`score.py`) | ✅ |
+| 3 | Dumb API client (`client.py`) | ✅ |
+| 4 | Astronomical windows + moon (`astro.py`) | ✅ |
+| 5 | Coordinator (`coordinator.py`) | ✅ |
+| 6 | Config flow with presets | ✅ |
+| 7 | Sensors (`sensor.py`) | ✅ |
+| 8 | Full integration tests | ✅ |
+| 9 | **Lovelace cards** | 🔄 in progress |
+| 10 | Options flow with collapsible sections | ⏳ |
+| 11 | Notifications + HACS packaging | ⏳ |
+
+Follow-ups also tracked: ozone/fog factors, `diagnostics.py` support, a
+brand icon, and a test-timezone cleanup in the coordinator tests.
+
+## Development
+
+Built incrementally as a learning project. See
+[`PROJECT_PRINCIPLES.md`](PROJECT_PRINCIPLES.md) for the architecture
+notes, design decisions, phase-by-phase build log, and the HA API gotchas
+learned the hard way (both on this project and its predecessor,
+[`sun_bathing`](https://github.com/dyslexicdogo/sun_bathing)).
+
+```bash
+scripts/setup     # create the .venv and install dependencies
+scripts/develop   # boot Home Assistant against ./config with the integration loaded
+scripts/test      # run the full pytest suite
+```
+
+- Tests: `pytest tests/ -v` (137 passing). Scoring and astronomical
+  logic are unit-tested in isolation with hand-built fakes; the API
+  client is tested with `aioresponses`; the integration has a real-hass,
+  real-config-entry end-to-end test.
+
+## Lessons learned from sun_bathing
+
+Everything in `PROJECT_PRINCIPLES.md` traces back to what `sun_bathing`
+taught us, but the card-related ones are worth calling out here because
+they shape Phase 9:
+
+- **Cards must live inside `custom_components/<domain>/www/`.** HACS
+  "Integration" category repos only download `custom_components/` — a
+  repo-root `www/` installs the Python fine but silently never ships the
+  card ("Custom element not found", no cause).
+- **Auto-injecting card scripts races the frontend.** `add_extra_js_url`
+  intermittently loses a hard-refresh race. The reliable path is
+  registering a Lovelace **resource** through the storage-collection API,
+  idempotently guarded.
+- **Verify HA APIs against the installed version before coding.**
+  `StaticPathConfig` objects (not dicts), read-only
+  `OptionsFlow.config_entry`, thread-safety on time-change callbacks,
+  `hass.http` being `None` in tests — all found by checking the actual
+  source.
+- **Test every increment before moving on**, with minimal fakes, not full
+  mocks or real network. Exception: UI/card work is verified manually
+  first, then backfilled once the design settles.
+
+## Inspiration & credits
+
+- **AstroWeather** and the **AstroWeather Card** by
+  [@mawinkler](https://github.com/mawinkler) — the "percent good per
+  factor" visualization and dense single-panel readouts inspired our
+  current-conditions card and per-factor color coding.
+- **Clear Outside** — the original astronomy-weather concept this
+  integration is inspired by.
+- **Sun Bathing** by the same author — the structural blueprint: project
+  phases, test discipline, and the HACS packaging lessons above.
+- Scoring/astronomy libraries: [Open-Meteo](https://open-meteo.com/),
+  [astral](https://github.com/sffjunkie/astral),
+  [Skyfield](https://rhodesmill.org/skyfield/) + NASA JPL
+  `de421.bsp` ephemeris.
+
+## License
+
+MIT (license file to be added with HACS packaging).
