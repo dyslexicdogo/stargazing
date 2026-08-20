@@ -88,14 +88,21 @@ class EphemerisError(Exception):
 
 def _get_ephemeris():
     global _timescale, _earth, _moon_body, _sun_body, _ephemeris_mtime
-    current_mtime = _EPHEMERIS_PATH.stat().st_mtime
+    try:
+        current_mtime = _EPHEMERIS_PATH.stat().st_mtime
+    except OSError as err:
+        raise EphemerisError(
+            f"Failed to load ephemeris {_EPHEMERIS_PATH}: {err}"
+        ) from err
     if _earth is None or current_mtime != _ephemeris_mtime:
         # file changed or first load
         try:
             _timescale = load.timescale()
             ephemeris = load_file(_EPHEMERIS_PATH)
         except (OSError, ValueError) as err:
-            raise EphemerisError(...)
+            raise EphemerisError(
+                f"Failed to load ephemeris {_EPHEMERIS_PATH}: {err}"
+            ) from err
         _earth = ephemeris["earth"]
         _moon_body = ephemeris["moon"]
         _sun_body = ephemeris["sun"]

@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 set -e
+cd "$(dirname "$0")/.."
 
-# Install uv if not present
-#if ! command -v uv &> /dev/null; then
-#    curl -LsSf https://astral.sh/uv/install.sh | sh
-#    export PATH="$HOME/.local/bin:$PATH"
-#fi
+# Install into the project venv regardless of what's on PATH
+export PATH="$PWD/.venv/bin:$PATH"
 
 pip install -r requirements.txt -r requirements_test.txt

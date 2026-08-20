@@ -5,8 +5,12 @@ integration 'stargazing': No setup or config entry setup function
 defined" showed up in the UI -- config_flow.py only creates the entry;
 this file is what actually turns that entry into a running coordinator.
 
-No platforms are forwarded yet (no sensor.py exists) -- this only gets
-the coordinator polling. Entities are a later phase.
+Now forwards to sensor.py (Phase 7): once the coordinator's first
+refresh succeeds, entities are set up via the standard
+async_forward_entry_setups()/async_unload_platforms() pair, and unload
+tears platforms down before shutting down the coordinator itself -- if
+platform unload were skipped, entities could keep referencing a
+shut-down coordinator.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import logging
 
 from astral import Observer
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ELEVATION, CONF_LATITUDE, CONF_LONGITUDE
+from homeassistant.const import CONF_ELEVATION, CONF_LATITUDE, CONF_LONGITUDE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -25,6 +29,8 @@ from .coordinator import StargazingCoordinator
 from .presets import config_entry_to_score_config, get_preset_values
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 type StargazingConfigEntry = ConfigEntry[StargazingCoordinator]
 
@@ -62,15 +68,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -
 
     entry.runtime_data = coordinator
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -> bool:
-    """Unload a config entry. shuts doww the polling coordinator and removes the runtime data"""
-    coordinator = getattr(entry, "runtime_data", None)
-    if coordinator is not None:
-        await coordinator.async_shutdown()  # stop the polling
-    return True
+    """Unload a config entry.
+
+    Unloads sensor.py's entities first, then shuts down the polling
+    coordinator -- only once platforms have confirmed they're done with
+    it. If platform unload fails (unload_ok is False), the coordinator
+    is deliberately left running rather than shut down out from under
+    entities that are still attached to it.
+    """
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    if unload_ok:
+        coordinator = getattr(entry, "runtime_data", None)
+        if coordinator is not None:
+            await coordinator.async_shutdown()  # stop the polling
+
+    return unload_ok
+
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate old config entry data to current version."""

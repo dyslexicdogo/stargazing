@@ -18,6 +18,7 @@ from astral import Depression, Observer
 
 from custom_components.stargazing.astro import (
     DARKNESS_TIERS,
+    EphemerisError,
     get_darkness_window,
     moon_altitude,
     moon_illumination_percent,
@@ -203,3 +204,44 @@ class TestMoonPosition:
         position = moon_position(INVERNESS, at)
         assert -90.0 <= position.altitude <= 90.0
         assert 0.0 <= position.illumination_percent <= 100.0
+
+
+# ---------------------------------------------------------------------------
+# EphemerisError -- load failures surface a clean error, not a raw
+# OSError/ValueError, and the message names the bundled file.
+# ---------------------------------------------------------------------------
+class TestEphemerisErrors:
+    def _reset_cache(self, monkeypatch, astro_module):
+        # moon tests populate the module-level ephemeris cache; force a
+        # reload path so load_file is actually reached again
+        for name in ("_timescale", "_earth", "_moon_body", "_sun_body", "_ephemeris_mtime"):
+            monkeypatch.setattr(astro_module, name, None)
+
+    def test_load_failure_raises_ephemeris_error_with_path(self, monkeypatch):
+        import custom_components.stargazing.astro as astro_module
+
+        self._reset_cache(monkeypatch, astro_module)
+
+        def boom(*args, **kwargs):
+            raise ValueError("corrupt ephemeris data")
+
+        monkeypatch.setattr(astro_module, "load_file", boom)
+
+        with pytest.raises(EphemerisError, match="de421.bsp"):
+            astro_module.moon_position(
+                INVERNESS,
+                datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc),
+            )
+
+    def test_missing_file_raises_ephemeris_error_with_path(self, monkeypatch):
+        import custom_components.stargazing.astro as astro_module
+        from pathlib import Path
+
+        self._reset_cache(monkeypatch, astro_module)
+        monkeypatch.setattr(astro_module, "_EPHEMERIS_PATH", Path("/nonexistent/de421.bsp"))
+
+        with pytest.raises(EphemerisError, match="de421.bsp"):
+            astro_module.moon_position(
+                INVERNESS,
+                datetime.datetime(2026, 1, 15, 22, 0, tzinfo=datetime.timezone.utc),
+            )

@@ -24,10 +24,19 @@ from custom_components.stargazing.const import DOMAIN
 from custom_components.stargazing.coordinator import (
     FORECAST_DAYS,
     NUM_NIGHTS_AHEAD,
+    HourlyScore,
+    NightlyScore,
     StargazingCoordinator,
+    current_hourly_score,
     determine_night_of,
 )
-from custom_components.stargazing.score import FalloffSpans, PlateauEdges, ScoreWeights
+from custom_components.stargazing.score import (
+    FalloffSpans,
+    HourlyConditions,
+    PlateauEdges,
+    ScoreBreakdown,
+    ScoreWeights,
+)
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 INVERNESS = Observer(latitude=57.4778, longitude=-4.2247, elevation=0)
@@ -149,6 +158,94 @@ class TestDetermineNightOf:
     def test_just_before_noon_is_still_last_night(self):
         now = datetime.datetime(2026, 1, 15, 11, 59)
         assert determine_night_of(now) == datetime.date(2026, 1, 14)
+
+
+def make_hourly_score(when: datetime.datetime, total: float) -> HourlyScore:
+    """A fully-populated HourlyScore. current_hourly_score() only reads
+    `.time`, but building the real dataclass keeps these fakes honest and
+    lets assertions read `.breakdown.total` too."""
+    return HourlyScore(
+        time=when,
+        conditions=HourlyConditions(
+            low_cloud_cover=0.0,
+            mid_cloud_cover=0.0,
+            high_cloud_cover=0.0,
+            temperature=10.0,
+            dew_point=5.0,
+            visibility=30000.0,
+            jet_stream_wind_speed=10.0,
+            moon_illumination=0.0,
+            moon_altitude=-10.0,
+            precipitation_probability=0.0,
+            wind_speed=5.0,
+        ),
+        breakdown=ScoreBreakdown(
+            low_cloud=100.0,
+            mid_cloud=100.0,
+            high_cloud=100.0,
+            dew_point_spread=100.0,
+            visibility=100.0,
+            jet_stream_wind=100.0,
+            moon_illumination=100.0,
+            precipitation_probability=100.0,
+            wind_speed=100.0,
+            total=total,
+        ),
+    )
+
+
+def make_night(night_of: datetime.date, hours: list[HourlyScore]) -> NightlyScore:
+    return NightlyScore(night_of=night_of, window=None, hourly_scores=hours)
+
+
+class TestCurrentHourlyScore:
+    def test_returns_hour_containing_now(self):
+        now = datetime.datetime(2026, 1, 15, 20, 30)
+        nightly_scores = [
+            make_night(
+                datetime.date(2026, 1, 15),
+                [
+                    make_hourly_score(datetime.datetime(2026, 1, 15, 19, 0), 1.0),
+                    make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 9.0),
+                    make_hourly_score(datetime.datetime(2026, 1, 15, 21, 0), 5.0),
+                ],
+            ),
+            make_night(datetime.date(2026, 1, 16), []),
+        ]
+
+        result = current_hourly_score(nightly_scores, now)
+
+        assert result is not None
+        assert result.time == datetime.datetime(2026, 1, 15, 20, 0)
+        assert result.breakdown.total == 9.0
+
+    def test_returns_none_when_no_hour_contains_now(self):
+        now = datetime.datetime(2026, 1, 15, 18, 30)
+        nightly_scores = [
+            make_night(
+                datetime.date(2026, 1, 15),
+                [make_hourly_score(datetime.datetime(2026, 1, 15, 19, 0), 1.0)],
+            ),
+        ]
+
+        assert current_hourly_score(nightly_scores, now) is None
+
+    def test_matches_exact_hour_boundary_and_excludes_next_hour(self):
+        now = datetime.datetime(2026, 1, 15, 21, 0)
+        nightly_scores = [
+            make_night(
+                datetime.date(2026, 1, 15),
+                [
+                    make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 3.0),
+                    make_hourly_score(datetime.datetime(2026, 1, 15, 21, 0), 9.0),
+                ],
+            ),
+        ]
+
+        result = current_hourly_score(nightly_scores, now)
+
+        assert result is not None
+        assert result.time == datetime.datetime(2026, 1, 15, 21, 0)
 
 
 # ---------------------------------------------------------------------------

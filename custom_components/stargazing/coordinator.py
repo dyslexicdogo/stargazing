@@ -112,6 +112,34 @@ class NightlyScore:
         return max(hs.breakdown.total for hs in self.hourly_scores)
 
 
+def current_hourly_score(
+    nightly_scores: list[NightlyScore], now: datetime
+) -> HourlyScore | None:
+    """Find the currently-active scored hour, if any, for the
+    current-conditions detail card.
+
+    `now` must be naive local time, matching HourlyScore.time -- see the
+    module docstring's TIMEZONE HANDLING note. Callers with a hass
+    tz-aware `now` (e.g. dt_util.now()) must strip tzinfo before calling
+    this, the same way _score_one_night() strips window boundaries.
+
+    Searches every night's hourly_scores rather than just the "current"
+    night_of, since determine_night_of()'s noon cutover and this
+    function's exact-hour match are two independent pieces of logic --
+    checking all nights is simpler and just as correct than trying to
+    keep them in sync. In practice at most one hour ever matches.
+
+    Returns None when no scored hour's 1-hour window contains `now`
+    (e.g. broad daylight, or between last night's dawn and tonight's
+    dusk).
+    """
+    for night in nightly_scores:
+        for hourly_score in night.hourly_scores:
+            if hourly_score.time <= now < hourly_score.time + timedelta(hours=1):
+                return hourly_score
+    return None
+
+
 def determine_night_of(now: datetime) -> date:
     """Decide which night's darkness window applies right now.
 

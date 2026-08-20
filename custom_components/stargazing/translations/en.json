@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Location",
+        "description": "Choose the observing location. Coordinates are validated against Open-Meteo before the integration is added.",
+        "data": {
+          "latitude": "Latitude",
+          "longitude": "Longitude",
+          "elevation": "Elevation (m)"
+        }
+      },
+      "preset": {
+        "title": "Scoring preset",
+        "description": "Choose how strict the scoring should be, and the minimum darkness you consider usable.",
+        "data": {
+          "preset": "Preset",
+          "twilight_tier": "Minimum acceptable darkness"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to contact Open-Meteo. Check the coordinates and try again."
+    },
+    "abort": {
+      "already_configured": "This location is already configured."
+    }
+  }
+}

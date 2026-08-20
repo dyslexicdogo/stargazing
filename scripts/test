@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")/.."
+
+# Use the project venv's pytest regardless of what's on PATH
+export PATH="$PWD/.venv/bin:$PATH"
+
 pytest tests/ -v
