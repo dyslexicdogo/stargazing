@@ -31,3 +31,10 @@ TWILIGHT_TIER_CHOICES: dict[str, tuple[Depression, ...]] = {
     TIER_CIVIL: (Depression.CIVIL,),
 }
 DEFAULT_TWILIGHT_TIER = TIER_ASTRONOMICAL  # darkest-first, never miss a window
+
+# Lovelace card resources this integration ships from www/. Keyed by
+# filename so the registration loop in __init__.py can add more cards
+# later without touching the loop itself -- just add an entry here.
+CARD_RESOURCES: dict[str, str] = {
+    "stargazing-forecast-card.js": f"/{DOMAIN}/stargazing-forecast-card.js",
+}

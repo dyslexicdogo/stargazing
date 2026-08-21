@@ -17,6 +17,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.stargazing import async_setup_entry, async_unload_entry
 from custom_components.stargazing.client import BASE_URL
 from custom_components.stargazing.const import (
+    CARD_RESOURCES,
     CONF_PRESET,
     CONF_TWILIGHT_TIER,
     DOMAIN,
@@ -67,6 +68,41 @@ def stub_moon_functions(monkeypatch):
         "custom_components.stargazing.coordinator.moon_position",
         lambda observer, at: MoonPosition(altitude=12.5, illumination_percent=40.0),
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_frontend_registered_flag():
+    """Reset the process-wide frontend registration guard per test."""
+    import custom_components.stargazing as stargazing_module
+
+    stargazing_module._frontend_registered = False
+    yield
+    stargazing_module._frontend_registered = False
+
+
+class FakeResources:
+    """Minimal stand-in for Lovelace's storage-mode resources collection."""
+
+    def __init__(self, existing_urls=(), loaded=True):
+        self._items = [{"url": url} for url in existing_urls]
+        self.loaded = loaded
+        self.load_called = False
+
+    async def async_load(self):
+        self.load_called = True
+        self.loaded = True
+
+    def async_items(self):
+        return list(self._items)
+
+    async def async_create_item(self, item):
+        self._items.append(item)
+        return item
+
+
+class FakeLovelaceData:
+    def __init__(self, resources):
+        self.resources = resources
 
 
 async def test_setup_entry_creates_and_starts_coordinator(hass, freezer):
@@ -160,3 +196,161 @@ async def test_async_migrate_entry_false_for_unknown_version(hass):
     entry = MockConfigEntry(domain="stargazing", version=999, data={})
     result = await async_migrate_entry(hass, entry)
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Frontend / Lovelace card registration
+# ---------------------------------------------------------------------------
+
+
+async def test_setup_entry_succeeds_when_http_not_loaded(hass, freezer):
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+
+    assert result is True
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_frontend_registers_static_path_when_http_available(hass, freezer):
+    from homeassistant.setup import async_setup_component
+
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+    await async_setup_component(hass, "http", {})
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+
+    assert result is True
+    import custom_components.stargazing as stargazing_module
+
+    assert stargazing_module._frontend_registered is True
+
+
+async def test_lovelace_resource_created_when_missing(hass, freezer):
+    from homeassistant.setup import async_setup_component
+
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+    await async_setup_component(hass, "http", {})
+
+    resources = FakeResources()
+    hass.data["lovelace"] = FakeLovelaceData(resources)
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with (
+        patch.object(hass.http, "async_register_static_paths", AsyncMock()),
+        aioresponses() as mocked,
+    ):
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+
+    assert result is True
+    created_urls = {item["url"] for item in resources.async_items()}
+    assert created_urls == set(CARD_RESOURCES.values())
+
+
+async def test_lovelace_resource_not_duplicated_when_already_present(hass, freezer):
+    from homeassistant.setup import async_setup_component
+
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+    await async_setup_component(hass, "http", {})
+
+    already_there = set(CARD_RESOURCES.values())
+    resources = FakeResources(existing_urls=already_there)
+    hass.data["lovelace"] = FakeLovelaceData(resources)
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with (
+        patch.object(hass.http, "async_register_static_paths", AsyncMock()),
+        aioresponses() as mocked,
+    ):
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+
+    assert result is True
+    urls = [item["url"] for item in resources.async_items()]
+    for url in already_there:
+        assert urls.count(url) == 1
+
+
+async def test_lovelace_resources_loaded_if_not_already(hass, freezer):
+    from homeassistant.setup import async_setup_component
+
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+    await async_setup_component(hass, "http", {})
+
+    resources = FakeResources(loaded=False)
+    hass.data["lovelace"] = FakeLovelaceData(resources)
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with (
+        patch.object(hass.http, "async_register_static_paths", AsyncMock()),
+        aioresponses() as mocked,
+    ):
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+
+    assert result is True
+    assert resources.load_called is True
+
+
+async def test_frontend_registration_is_noop_when_lovelace_absent(hass, freezer):
+    from homeassistant.setup import async_setup_component
+
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+    await async_setup_component(hass, "http", {})
+    assert "lovelace" not in hass.data
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with (
+        patch.object(hass.http, "async_register_static_paths", AsyncMock()),
+        aioresponses() as mocked,
+    ):
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+
+    assert result is True
+
+
+async def test_frontend_registration_only_runs_once_across_entries(hass, freezer):
+    from homeassistant.setup import async_setup_component
+    from custom_components.stargazing import _async_register_frontend
+
+    await async_setup_component(hass, "http", {})
+
+    resources = FakeResources()
+    hass.data["lovelace"] = FakeLovelaceData(resources)
+
+    with patch.object(
+        hass.http, "async_register_static_paths", AsyncMock()
+    ) as mock_register:
+        await _async_register_frontend(hass)
+        await _async_register_frontend(hass)
+
+    mock_register.assert_awaited_once()
+    urls = [item["url"] for item in resources.async_items()]
+    for url in CARD_RESOURCES.values():
+        assert urls.count(url) == 1

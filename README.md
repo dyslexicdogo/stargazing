@@ -11,10 +11,10 @@ site and the
 Unlike fixed daytime windows, stargazing windows are **dynamic** — tied to
 the actual astronomical dusk/dawn for your location and season.
 
-> **Status:** Phases 1–8 of the build roadmap are complete (scoring, API
+> **Status:** Phases 1–9 of the build roadmap are complete (scoring, API
 > client, astronomical windows, coordinator, config flow, sensors, full
-> integration tests). Phase 9 — a graphical 3-night forecast card and a
-> current-conditions card — is in progress. See [Roadmap](#roadmap).
+> integration tests, and the 3-night forecast Lovelace card). See
+> [Roadmap](#roadmap).
 
 ---
 
@@ -31,10 +31,11 @@ coordinator.py — polls every 30 min, combines weather with the
 score.py — pure, zero-HA-imports scoring: 9 factors, each 0–100,
         weighted into a total per hour (higher = better)
         ↓
-sensor.py — 4 sensors (3 night forecasts + current conditions)
+sensor.py — 3 night-forecast sensors (peak score per night, per-hour
+        forecast attributes)
         ↓
-Lovelace cards (custom:stargazing-forecast-card,
-        custom:stargazing-current-card) — in progress
+Lovelace card (custom:stargazing-forecast-card) — 3-night chart with
+        tap-to-see-breakdown
 ```
 
 - **Darkness windows** are computed from real astronomical dusk/dawn
@@ -55,18 +56,14 @@ Lovelace cards (custom:stargazing-forecast-card,
 - Three scoring presets: Strict / Balanced / Relaxed
 - Three "preferred darkness" night types: Astronomical (default) /
   Nautical / Civil
-- Four sensors: tonight, tomorrow night, night+2 peaks, plus current
-  conditions
-- Current-conditions sensor rolls over at each local hour boundary —
-  it never shows the previous hour's score between 30-minute polls
-- 137 passing tests across the client, scoring, windows, coordinator,
+- Three night sensors: tonight, tomorrow night, and night+2 peaks, each
+  with the full per-hour forecast available as attributes
+- 143 passing tests across the client, scoring, windows, coordinator,
   config flow, and sensors
 
-**In progress (Phase 9):**
+**Built in Phase 9:**
 - `custom:stargazing-forecast-card` — a graphical 3-night score-over-time
-  chart
-- `custom:stargazing-current-card` — the active hour at a glance with a
-  "next best hour" fallback
+  chart; tap any hour to see its nine-factor breakdown below the chart
 
 **Planned:**
 - Options flow (edit preset/tier after setup, collapsible sections)
@@ -158,10 +155,9 @@ fallback keeps a window.
    Civil (most hours). The darkest choice is used when reachable; the
    window falls back to a shallower tier so a night is never skipped.
 
-You'll end up with four sensors:
-`sensor.stargazing_tonight`, `sensor.stargazing_tomorrow_night`,
-`sensor.stargazing_in_two_nights`, and
-`sensor.stargazing_current_conditions`.
+You'll end up with three sensors:
+`sensor.stargazing_tonight`, `sensor.stargazing_tomorrow_night`, and
+`sensor.stargazing_in_two_nights`.
 
 ## Sensors
 
@@ -170,21 +166,18 @@ You'll end up with four sensors:
 | `sensor.stargazing_tonight` | Best (peak) score tonight, 0–100 | `night_of`, `window_start`, `window_end`, `twilight_tier`, `hourly_scores_count`, `forecast`¹ |
 | `sensor.stargazing_tomorrow_night` | Peak score tomorrow night | same as above |
 | `sensor.stargazing_in_two_nights` | Peak score in two nights | same as above |
-| `sensor.stargazing_current_conditions` | Active hour's total score, or `unknown` outside a scored window | `time`, the 9 factor sub-scores, `upcoming`² |
 
 ¹ `forecast` — the full per-hour breakdown for that night: one dict per
-scored hour with `time`, `score`, and all nine factor sub-scores. This is
-what the forecast card renders. *(Ships with the Phase 9 cards.)*
+scored hour with `time`, `score`, and all nine factor sub-scores. Each
+entry also carries a `raw` bundle with the un-rounded raw readings, so
+the card can show each factor as "reading (score)". This is what the
+forecast card renders.
 
-² `upcoming` — the future scored hours across all three nights
-(`time`, `score`, `night_of`), used by the current-conditions card's
-"next best hour" fallback. *(Ships with the Phase 9 cards.)*
+## Lovelace card (Phase 9 — complete)
 
-## Lovelace cards (Phase 9 — in progress)
-
-Two cards are being built, designed around one principle: the overview
-shows *only scores* (no parameter walls), and the nine factors appear
-on demand for the hour you care about.
+One card, designed around one principle: the overview shows *only
+scores* (no parameter walls), and the nine factors appear on demand for
+the hour you care about.
 
 ### `custom:stargazing-forecast-card` — graphical 3-night forecast
 
@@ -210,8 +203,9 @@ on demand for the hour you care about.
 │  Night +2      20:08–04:40 · peak 61                     │
 │  ──────────────────────────────────────────────────────   │
 │  Selected: 21:00 · score 78                               │
-│  ☁ Low 82 ☁ Mid 74 ☁ High 90 👁 Vis 71 ✈ Jet 68          │
-│  🌙 Moon 30 💧 Precip 85 💨 Wind 72 ☀ Dew 65              │
+│  ☁ Low 10% (82) ☁ Mid 15% (74) ☁ High 20% (90)           │
+│  👁 Vis 20 km (71) ✈ Jet 12 m/s (68) 🌙 Moon 30% (85)     │
+│  💧 Precip 5% (85) 💨 Wind 8 km/h (72) ☀ Dew 4 °C (65)    │
 └───────────────────────────────────────────────────────────┘
 ```
 
@@ -226,45 +220,16 @@ type: custom:stargazing-forecast-card
 # optional: entity_tonight / entity_tomorrow / entity_night2 overrides
 ```
 
-### `custom:stargazing-current-card` — current conditions
-
-```
-┌───────────────────────────────────────────────────────────┐
-│ ☾ Current Conditions            now · 21:00                │
-│  ┌─────────────┐   ☁ Low 82   ☁ Mid 74   ☁ High 90        │
-│  │     78      │   👁 Vis 71   ✈ Jet 68   🌙 Moon 30%      │
-│  │   SCORE     │   💧 Precip 85 💨 Wind 72 ☀ Dew 65        │
-│  └─────────────┘                                          │
-│  Window 20:12–04:47 · every 30 min                        │
-│                                                           │
-│  ⚠ unknown: "Come back later — best upcoming hour          │
-│    21:00 tonight (78)"                                    │
-│  ⚠ none upcoming: "No usable window in the next 3 nights"  │
-└───────────────────────────────────────────────────────────┘
-```
-
-- Active hour → big score + the nine factors + the current darkness window.
-- Outside a scored hour → "come back later" with the **best upcoming hour
-  across all three nights**; if none exists, "No usable window in the next
-  3 nights."
-
-```yaml
-type: custom:stargazing-current-card
-# optional: entity override
-```
-
 ### Resources
 
-Both cards register themselves as Lovelace resources automatically once
-the integration is set up. If you manage dashboards in **YAML mode**,
-Lovelace's resource collection isn't available — add the resources
+The card registers itself as a Lovelace resource automatically once the
+integration is set up. If you manage dashboards in **YAML mode**,
+Lovelace's resource collection isn't available — add the resource
 manually instead:
 
 ```yaml
 resources:
   - url: /stargazing/stargazing-forecast-card.js
-    type: module
-  - url: /stargazing/stargazing-current-card.js
     type: module
 ```
 
@@ -280,7 +245,7 @@ resources:
 | 6 | Config flow with presets | ✅ |
 | 7 | Sensors (`sensor.py`) | ✅ |
 | 8 | Full integration tests | ✅ |
-| 9 | **Lovelace cards** | 🔄 in progress |
+| 9 | **Lovelace forecast card** (`custom:stargazing-forecast-card`, served from `www/`) | ✅ |
 | 10 | Options flow with collapsible sections | ⏳ |
 | 11 | Notifications + HACS packaging | ⏳ |
 
@@ -334,7 +299,7 @@ they shape Phase 9:
 - **AstroWeather** and the **AstroWeather Card** by
   [@mawinkler](https://github.com/mawinkler) — the "percent good per
   factor" visualization and dense single-panel readouts inspired our
-  current-conditions card and per-factor color coding.
+  per-factor color coding and the forecast card's breakdown panel.
 - **Clear Outside** — the original astronomy-weather concept this
   integration is inspired by.
 - **Sun Bathing** by the same author — the structural blueprint: project

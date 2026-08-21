@@ -192,6 +192,22 @@ Each factor is scored 0–100 (higher = better) and combined into a weighted
 - `hass.http` is `None` in the bare test `hass` fixture — tests that
   exercise `async_setup_entry` static-path registration must
   `await async_setup_component(hass, "http", {})` first
+- That same real `async_setup_component(hass, "http", {})` call spins up
+  a background aiohttp server thread that this test harness doesn't
+  always clean up between test *functions* in one pytest session —
+  observed as either a stray-thread assertion failure in the harness's
+  own `verify_cleanup` teardown fixture, or (if two different tests each
+  do a *real*, unmocked `hass.http.async_register_static_paths()` call
+  for the same `url_path`) an aiohttp `RuntimeError: Added route will
+  never be executed, method GET is already registered` — routes appear
+  to leak across tests even though each gets a fresh `hass`. Real HA
+  processes don't hit this (one aiohttp app per process lifetime,
+  registration guarded by a module-level flag). Workaround: keep at most
+  one test per file that does the real, unmocked registration call to
+  confirm it doesn't raise; every other test exercising the surrounding
+  logic (resource dedup, no-op branches, etc.) should
+  `patch.object(hass.http, "async_register_static_paths", AsyncMock())`
+  instead of hitting the real aiohttp router repeatedly
 - Time-zone in tests: `dt_util.now()` follows the harness-set default
   timezone, NOT a plain `hass.config.time_zone = "..."` assignment — tests
   must use `await hass.config.async_set_time_zone(...)`

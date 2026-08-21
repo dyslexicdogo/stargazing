@@ -89,11 +89,6 @@ def night_unique_id(entry: MockConfigEntry, night_index: int) -> str:
     return f"{entry.entry_id}_night_{night_index}"
 
 
-def current_conditions_unique_id(entry: MockConfigEntry) -> str:
-    """Mirrors sensor.py's StargazingCurrentConditionsSensor unique_id."""
-    return f"{entry.entry_id}_current_conditions"
-
-
 def entity_id(hass, unique_id: str) -> str | None:
     """Resolve a sensor entity_id from its unique_id via the entity
     registry, rather than assuming HA's has_entity_name slugification
@@ -129,7 +124,7 @@ async def _setup_entry(hass) -> MockConfigEntry:
     return entry
 
 
-async def test_four_sensors_created(hass, freezer):
+async def test_three_sensors_created(hass, freezer):
     freezer.move_to("2026-01-15 20:00:00")
     await hass.config.async_set_time_zone("Europe/London")
 
@@ -138,7 +133,6 @@ async def test_four_sensors_created(hass, freezer):
     assert entity_id(hass, night_unique_id(entry, 0)) is not None
     assert entity_id(hass, night_unique_id(entry, 1)) is not None
     assert entity_id(hass, night_unique_id(entry, 2)) is not None
-    assert entity_id(hass, current_conditions_unique_id(entry)) is not None
 
 
 @pytest.mark.parametrize("night_index", [0, 1, 2])
@@ -205,6 +199,21 @@ async def test_night_sensor_attributes_include_forecast(hass, freezer):
         ):
             assert entry_dict[factor] == getattr(breakdown, factor)
 
+        # the `raw` bundle carries each factor's raw reading under the
+        # same keys, so the forecast card can render "reading (score)"
+        # without a second naming lookup
+        raw = entry_dict["raw"]
+        conditions = hourly_score.conditions
+        assert raw["low_cloud"] == conditions.low_cloud_cover
+        assert raw["mid_cloud"] == conditions.mid_cloud_cover
+        assert raw["high_cloud"] == conditions.high_cloud_cover
+        assert raw["dew_point_spread"] == conditions.dew_point_spread
+        assert raw["visibility"] == conditions.visibility
+        assert raw["jet_stream_wind"] == conditions.jet_stream_wind_speed
+        assert raw["moon_illumination"] == conditions.moon_illumination
+        assert raw["precipitation_probability"] == conditions.precipitation_probability
+        assert raw["wind_speed"] == conditions.wind_speed
+
 
 async def test_night_sensor_forecast_empty_when_no_darkness_window(hass, freezer):
     freezer.move_to("2026-06-20 20:00:00")
@@ -231,163 +240,14 @@ async def test_night_sensor_unique_ids_are_distinct_and_scoped_to_entry(hass, fr
         night_unique_id(entry, 0),
         night_unique_id(entry, 1),
         night_unique_id(entry, 2),
-        current_conditions_unique_id(entry),
     }
-    assert len(unique_ids) == 4
+    assert len(unique_ids) == 3
     assert all(uid.startswith(entry.entry_id) for uid in unique_ids)
     # And every one of them actually resolved to a real entity -- a
     # unique_id that's merely well-formed but unregistered would be a
     # silent setup bug.
     for uid in unique_ids:
         assert entity_id(hass, uid) is not None
-
-
-async def test_current_conditions_state_matches_active_hour(hass, freezer):
-    freezer.move_to("2026-01-15 20:00:00")
-    await hass.config.async_set_time_zone("Europe/London")
-
-    entry = await _setup_entry(hass)
-    coordinator = entry.runtime_data
-    active_hour = coordinator.data[0].hourly_scores[0]
-
-    state = get_state(hass, current_conditions_unique_id(entry))
-    assert float(state.state) == active_hour.breakdown.total
-    assert state.attributes["time"] == active_hour.time.isoformat()
-    # every ScoreBreakdown factor is exposed as an attribute -- assert the
-    # full set, not a sample, so a dropped factor fails loudly
-    breakdown = active_hour.breakdown
-    for factor in (
-        "low_cloud",
-        "mid_cloud",
-        "high_cloud",
-        "dew_point_spread",
-        "visibility",
-        "jet_stream_wind",
-        "moon_illumination",
-        "precipitation_probability",
-        "wind_speed",
-    ):
-        assert state.attributes[factor] == getattr(breakdown, factor)
-
-
-async def test_current_conditions_rolls_over_at_hour_boundary(hass, freezer):
-    # The coordinator only polls every 30 min, so at the top of an hour
-    # the active-hour sensor must roll over via its hour-boundary
-    # listener -- not wait for the next poll. Set up at 20:00 (shows the
-    # 20:00 hour), then advance to 21:00 and fire the time-change event
-    # the listener is registered on.
-    #
-    # The aioresponses context stays open across the whole test: firing
-    # at 21:00 also makes the coordinator's 30-min poll timer "due" (it
-    # was scheduled for 20:30), so that coincidental refresh must get a
-    # mocked response too -- otherwise it would hit the real network.
-    from datetime import datetime as dt, timezone
-
-    from pytest_homeassistant_custom_component.common import async_fire_time_changed
-
-    freezer.move_to("2026-01-15 20:00:00")
-    await hass.config.async_set_time_zone("Europe/London")
-
-    entry = make_entry()
-    entry.add_to_hass(hass)
-    with aioresponses() as mocked:
-        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
-        result = await hass.config_entries.async_setup(entry.entry_id)
-        assert result is True
-        coordinator = entry.runtime_data
-
-        before = get_state(hass, current_conditions_unique_id(entry))
-        assert (
-            float(before.state)
-            == coordinator.data[0].hourly_scores[0].breakdown.total
-        )
-
-        freezer.move_to("2026-01-15 21:00:01")
-        async_fire_time_changed(hass, dt(2026, 1, 15, 21, 0, tzinfo=timezone.utc))
-        await hass.async_block_till_done()
-
-        after = get_state(hass, current_conditions_unique_id(entry))
-        assert (
-            float(after.state)
-            == coordinator.data[0].hourly_scores[1].breakdown.total
-        )
-        assert after.attributes["time"] == "2026-01-15T21:00:00"
-
-
-async def test_current_conditions_state_none_outside_scored_hours(hass, freezer):
-    # Frozen well past the last scored reading (21:00-22:00) but still
-    # "tonight" per determine_night_of() -- no hourly_score covers this
-    # instant, so the sensor should report unknown rather than stale
-    # data or a crash.
-    freezer.move_to("2026-01-15 23:30:00")
-    await hass.config.async_set_time_zone("Europe/London")
-
-    entry = await _setup_entry(hass)
-
-    state = get_state(hass, current_conditions_unique_id(entry))
-    assert state.state == "unknown"
-
-
-async def test_current_conditions_attributes_include_upcoming(hass, freezer):
-    freezer.move_to("2026-01-15 20:00:00")
-    await hass.config.async_set_time_zone("Europe/London")
-
-    entry = await _setup_entry(hass)
-    coordinator = entry.runtime_data
-    # Every scored hour after the active one (20:00), across all three
-    # nights, matching upcoming_hourly_scores()'s own definition -- kept
-    # independent of that function rather than importing it, so this
-    # test would fail if the two ever silently drifted apart.
-    expected_times = [
-        "2026-01-15T21:00:00",
-        "2026-01-16T20:00:00",
-        "2026-01-16T23:00:00",
-        "2026-01-17T21:00:00",
-    ]
-
-    state = get_state(hass, current_conditions_unique_id(entry))
-    upcoming = state.attributes["upcoming"]
-
-    assert [item["time"] for item in upcoming] == expected_times
-    # Spot-check one entry's shape: time/score/night_of, not the full
-    # breakdown (see sensor.py's _upcoming_entry docstring).
-    assert set(upcoming[0].keys()) == {"time", "score", "night_of"}
-    assert upcoming[0]["night_of"] == "2026-01-15"
-    assert upcoming[0]["score"] == coordinator.data[0].hourly_scores[1].breakdown.total
-
-
-async def test_current_conditions_upcoming_present_when_state_unknown(hass, freezer):
-    # The whole point of "upcoming": it must still be there when the
-    # sensor itself is unknown, since that's exactly when the card needs
-    # a "come back later" fallback. 23:30 is outside every scored hour
-    # tonight, but tomorrow/night+2 still have future hours.
-    freezer.move_to("2026-01-15 23:30:00")
-    await hass.config.async_set_time_zone("Europe/London")
-
-    entry = await _setup_entry(hass)
-
-    state = get_state(hass, current_conditions_unique_id(entry))
-    assert state.state == "unknown"
-    upcoming = state.attributes["upcoming"]
-    assert len(upcoming) > 0
-    assert upcoming[0]["time"] == "2026-01-16T20:00:00"
-
-
-async def test_current_conditions_upcoming_empty_list_not_missing_when_nothing_left(
-    hass, freezer
-):
-    # Frozen after every scored hour in the fixture across all three
-    # nights -- upcoming should be an empty list (still present as a
-    # key), not absent, so the card doesn't have to guess between "no
-    # data yet" and "genuinely nothing upcoming".
-    freezer.move_to("2026-01-17 23:30:00")
-    await hass.config.async_set_time_zone("Europe/London")
-
-    entry = await _setup_entry(hass)
-
-    state = get_state(hass, current_conditions_unique_id(entry))
-    assert "upcoming" in state.attributes
-    assert state.attributes["upcoming"] == []
 
 
 async def test_night_sensors_unknown_when_no_darkness_window(hass, freezer):
@@ -414,9 +274,6 @@ async def test_night_sensors_unknown_when_no_darkness_window(hass, freezer):
         assert state.attributes["window_end"] is None
         assert state.attributes["twilight_tier"] is None
         assert state.attributes["hourly_scores_count"] == 0
-
-    current = get_state(hass, current_conditions_unique_id(entry))
-    assert current.state == "unknown"
 
 
 async def test_unload_entry_removes_sensor_entities(hass, freezer):

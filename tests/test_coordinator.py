@@ -24,18 +24,12 @@ from custom_components.stargazing.const import DOMAIN
 from custom_components.stargazing.coordinator import (
     FORECAST_DAYS,
     NUM_NIGHTS_AHEAD,
-    HourlyScore,
-    NightlyScore,
     StargazingCoordinator,
-    current_hourly_score,
     determine_night_of,
-    upcoming_hourly_scores,
 )
 from custom_components.stargazing.score import (
     FalloffSpans,
-    HourlyConditions,
     PlateauEdges,
-    ScoreBreakdown,
     ScoreWeights,
 )
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -161,174 +155,6 @@ class TestDetermineNightOf:
         assert determine_night_of(now) == datetime.date(2026, 1, 14)
 
 
-def make_hourly_score(when: datetime.datetime, total: float) -> HourlyScore:
-    """A fully-populated HourlyScore. current_hourly_score() only reads
-    `.time`, but building the real dataclass keeps these fakes honest and
-    lets assertions read `.breakdown.total` too."""
-    return HourlyScore(
-        time=when,
-        conditions=HourlyConditions(
-            low_cloud_cover=0.0,
-            mid_cloud_cover=0.0,
-            high_cloud_cover=0.0,
-            temperature=10.0,
-            dew_point=5.0,
-            visibility=30000.0,
-            jet_stream_wind_speed=10.0,
-            moon_illumination=0.0,
-            moon_altitude=-10.0,
-            precipitation_probability=0.0,
-            wind_speed=5.0,
-        ),
-        breakdown=ScoreBreakdown(
-            low_cloud=100.0,
-            mid_cloud=100.0,
-            high_cloud=100.0,
-            dew_point_spread=100.0,
-            visibility=100.0,
-            jet_stream_wind=100.0,
-            moon_illumination=100.0,
-            precipitation_probability=100.0,
-            wind_speed=100.0,
-            total=total,
-        ),
-    )
-
-
-def make_night(night_of: datetime.date, hours: list[HourlyScore]) -> NightlyScore:
-    return NightlyScore(night_of=night_of, window=None, hourly_scores=hours)
-
-
-class TestCurrentHourlyScore:
-    def test_returns_hour_containing_now(self):
-        now = datetime.datetime(2026, 1, 15, 20, 30)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 15),
-                [
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 19, 0), 1.0),
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 9.0),
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 21, 0), 5.0),
-                ],
-            ),
-            make_night(datetime.date(2026, 1, 16), []),
-        ]
-
-        result = current_hourly_score(nightly_scores, now)
-
-        assert result is not None
-        assert result.time == datetime.datetime(2026, 1, 15, 20, 0)
-        assert result.breakdown.total == 9.0
-
-    def test_returns_none_when_no_hour_contains_now(self):
-        now = datetime.datetime(2026, 1, 15, 18, 30)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 15),
-                [make_hourly_score(datetime.datetime(2026, 1, 15, 19, 0), 1.0)],
-            ),
-        ]
-
-        assert current_hourly_score(nightly_scores, now) is None
-
-    def test_matches_exact_hour_boundary_and_excludes_next_hour(self):
-        now = datetime.datetime(2026, 1, 15, 21, 0)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 15),
-                [
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 3.0),
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 21, 0), 9.0),
-                ],
-            ),
-        ]
-
-        result = current_hourly_score(nightly_scores, now)
-
-        assert result is not None
-        assert result.time == datetime.datetime(2026, 1, 15, 21, 0)
-
-
-class TestUpcomingHourlyScores:
-    def test_excludes_past_and_current_hour_includes_future(self):
-        # "now" sits inside the 20:00 hour -- that hour is current, not
-        # upcoming (current_hourly_score() owns it), and the 19:00 hour
-        # is already past. Only 21:00 should come back.
-        now = datetime.datetime(2026, 1, 15, 20, 30)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 15),
-                [
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 19, 0), 1.0),
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 9.0),
-                    make_hourly_score(datetime.datetime(2026, 1, 15, 21, 0), 5.0),
-                ],
-            ),
-        ]
-
-        result = upcoming_hourly_scores(nightly_scores, now)
-
-        assert [item.hourly_score.time for item in result] == [
-            datetime.datetime(2026, 1, 15, 21, 0)
-        ]
-
-    def test_sorted_chronologically_across_nights(self):
-        # Deliberately built out of chronological order (night 2's hour
-        # listed before night 1's) to confirm the function sorts by
-        # time itself rather than relying on nightly_scores' own order.
-        now = datetime.datetime(2026, 1, 15, 18, 0)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 16),
-                [make_hourly_score(datetime.datetime(2026, 1, 16, 20, 0), 4.0)],
-            ),
-            make_night(
-                datetime.date(2026, 1, 15),
-                [make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 8.0)],
-            ),
-        ]
-
-        result = upcoming_hourly_scores(nightly_scores, now)
-
-        assert [item.hourly_score.time for item in result] == [
-            datetime.datetime(2026, 1, 15, 20, 0),
-            datetime.datetime(2026, 1, 16, 20, 0),
-        ]
-
-    def test_each_entry_carries_its_own_night_of(self):
-        now = datetime.datetime(2026, 1, 15, 18, 0)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 15),
-                [make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 8.0)],
-            ),
-            make_night(
-                datetime.date(2026, 1, 16),
-                [make_hourly_score(datetime.datetime(2026, 1, 16, 20, 0), 4.0)],
-            ),
-        ]
-
-        result = upcoming_hourly_scores(nightly_scores, now)
-
-        assert [item.night_of for item in result] == [
-            datetime.date(2026, 1, 15),
-            datetime.date(2026, 1, 16),
-        ]
-
-    def test_returns_empty_list_when_nothing_upcoming(self):
-        now = datetime.datetime(2026, 1, 15, 22, 0)
-        nightly_scores = [
-            make_night(
-                datetime.date(2026, 1, 15),
-                [make_hourly_score(datetime.datetime(2026, 1, 15, 20, 0), 8.0)],
-            ),
-        ]
-
-        assert upcoming_hourly_scores(nightly_scores, now) == []
-
-
-# ---------------------------------------------------------------------------
-# StargazingCoordinator._async_update_data -- multi-night structure
 # ---------------------------------------------------------------------------
 class TestCoordinatorReturnsThreeNights:
     async def test_returns_num_nights_ahead_entries(self, hass, freezer):

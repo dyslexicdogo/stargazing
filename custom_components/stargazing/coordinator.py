@@ -7,13 +7,11 @@ lives here -- that's client.py (API), astro.py (windows/moon), and
 score.py (scoring).
 
 MULTI-NIGHT: computes NUM_NIGHTS_AHEAD (3) consecutive nights' worth of
-scores in one poll, not just tonight's. This backs two different UI
-needs: a 3-day overview card (peak score per night, mirroring
-sun_bathing's pattern) and a current-conditions detail card (the
-currently-active hour's full ScoreBreakdown, when one exists). A single
-Open-Meteo call covers all 3 nights -- FORECAST_DAYS is set generously
-enough to include the last night's early-morning dawn spillover into the
-following calendar day.
+scores in one poll, not just tonight's -- it backs the 3-night forecast
+card (peak score per night plus per-hour breakdowns, mirroring
+sun_bathing's pattern). A single Open-Meteo call covers all 3 nights --
+FORECAST_DAYS is set generously enough to include the last night's
+early-morning dawn spillover into the following calendar day.
 
 Nights are independent: if one night has no darkness window at all
 (e.g. summer solstice with strict tiers configured), that night's entry
@@ -110,73 +108,6 @@ class NightlyScore:
         if not self.hourly_scores:
             return None
         return max(hs.breakdown.total for hs in self.hourly_scores)
-
-
-def current_hourly_score(
-    nightly_scores: list[NightlyScore], now: datetime
-) -> HourlyScore | None:
-    """Find the currently-active scored hour, if any, for the
-    current-conditions detail card.
-
-    `now` must be naive local time, matching HourlyScore.time -- see the
-    module docstring's TIMEZONE HANDLING note. Callers with a hass
-    tz-aware `now` (e.g. dt_util.now()) must strip tzinfo before calling
-    this, the same way _score_one_night() strips window boundaries.
-
-    Searches every night's hourly_scores rather than just the "current"
-    night_of, since determine_night_of()'s noon cutover and this
-    function's exact-hour match are two independent pieces of logic --
-    checking all nights is simpler and just as correct than trying to
-    keep them in sync. In practice at most one hour ever matches.
-
-    Returns None when no scored hour's 1-hour window contains `now`
-    (e.g. broad daylight, or between last night's dawn and tonight's
-    dusk).
-    """
-    for night in nightly_scores:
-        for hourly_score in night.hourly_scores:
-            if hourly_score.time <= now < hourly_score.time + timedelta(hours=1):
-                return hourly_score
-    return None
-
-
-@dataclass
-class UpcomingHourlyScore:
-    """One future scored hour plus which night it belongs to -- HourlyScore
-    on its own doesn't carry night_of, and the current-conditions card's
-    "next best hour" fallback needs it (e.g. "next best hour: tomorrow
-    night, 21:00, 72") so it can label results usefully across a
-    multi-night boundary."""
-
-    night_of: date
-    hourly_score: HourlyScore
-
-
-def upcoming_hourly_scores(
-    nightly_scores: list[NightlyScore], now: datetime
-) -> list[UpcomingHourlyScore]:
-    """Every scored hour strictly after `now`, across all nights, sorted
-    chronologically, for the current-conditions card's "next best hour"
-    fallback when no hour is currently active.
-
-    `now` must be naive local time, same requirement as
-    current_hourly_score() -- see its docstring and the module
-    docstring's TIMEZONE HANDLING note.
-
-    Deliberately not filtered/reduced to just the single best hour here:
-    that's a display decision (the card may want to show more than one
-    option, or pick "best" by a different rule later), so this stays as
-    plain data and the card/sensor layer decides what to do with it --
-    same "coordinator/helpers stay dumb" principle as everywhere else.
-    """
-    upcoming = [
-        UpcomingHourlyScore(night_of=night.night_of, hourly_score=hourly_score)
-        for night in nightly_scores
-        for hourly_score in night.hourly_scores
-        if hourly_score.time > now
-    ]
-    upcoming.sort(key=lambda item: item.hourly_score.time)
-    return upcoming
 
 
 def determine_night_of(now: datetime) -> date:
