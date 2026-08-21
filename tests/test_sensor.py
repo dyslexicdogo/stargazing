@@ -173,6 +173,54 @@ async def test_night_sensor_attributes_include_window(hass, freezer):
     assert state.attributes["hourly_scores_count"] == len(coordinator.data[0].hourly_scores)
 
 
+async def test_night_sensor_attributes_include_forecast(hass, freezer):
+    freezer.move_to("2026-01-15 20:00:00")
+    await hass.config.async_set_time_zone("Europe/London")
+
+    entry = await _setup_entry(hass)
+    coordinator = entry.runtime_data
+    night = coordinator.data[0]
+    assert len(night.hourly_scores) == 2  # sanity check on the fixture itself
+
+    state = get_state(hass, night_unique_id(entry, 0))
+    forecast = state.attributes["forecast"]
+    assert len(forecast) == len(night.hourly_scores)
+
+    for entry_dict, hourly_score in zip(forecast, night.hourly_scores):
+        assert entry_dict["time"] == hourly_score.time.isoformat()
+        assert entry_dict["score"] == hourly_score.breakdown.total
+        # every ScoreBreakdown factor is present -- assert the full set,
+        # not a sample, so a dropped factor fails loudly
+        breakdown = hourly_score.breakdown
+        for factor in (
+            "low_cloud",
+            "mid_cloud",
+            "high_cloud",
+            "dew_point_spread",
+            "visibility",
+            "jet_stream_wind",
+            "moon_illumination",
+            "precipitation_probability",
+            "wind_speed",
+        ):
+            assert entry_dict[factor] == getattr(breakdown, factor)
+
+
+async def test_night_sensor_forecast_empty_when_no_darkness_window(hass, freezer):
+    freezer.move_to("2026-06-20 20:00:00")
+    await hass.config.async_set_time_zone("Europe/London")
+
+    entry = make_entry(twilight_tier=TIER_ASTRONOMICAL)
+    entry.add_to_hass(hass)
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        result = await hass.config_entries.async_setup(entry.entry_id)
+    assert result is True
+
+    state = get_state(hass, night_unique_id(entry, 0))
+    assert state.attributes["forecast"] == []
+
+
 async def test_night_sensor_unique_ids_are_distinct_and_scoped_to_entry(hass, freezer):
     freezer.move_to("2026-01-15 20:00:00")
     await hass.config.async_set_time_zone("Europe/London")
@@ -278,6 +326,68 @@ async def test_current_conditions_state_none_outside_scored_hours(hass, freezer)
 
     state = get_state(hass, current_conditions_unique_id(entry))
     assert state.state == "unknown"
+
+
+async def test_current_conditions_attributes_include_upcoming(hass, freezer):
+    freezer.move_to("2026-01-15 20:00:00")
+    await hass.config.async_set_time_zone("Europe/London")
+
+    entry = await _setup_entry(hass)
+    coordinator = entry.runtime_data
+    # Every scored hour after the active one (20:00), across all three
+    # nights, matching upcoming_hourly_scores()'s own definition -- kept
+    # independent of that function rather than importing it, so this
+    # test would fail if the two ever silently drifted apart.
+    expected_times = [
+        "2026-01-15T21:00:00",
+        "2026-01-16T20:00:00",
+        "2026-01-16T23:00:00",
+        "2026-01-17T21:00:00",
+    ]
+
+    state = get_state(hass, current_conditions_unique_id(entry))
+    upcoming = state.attributes["upcoming"]
+
+    assert [item["time"] for item in upcoming] == expected_times
+    # Spot-check one entry's shape: time/score/night_of, not the full
+    # breakdown (see sensor.py's _upcoming_entry docstring).
+    assert set(upcoming[0].keys()) == {"time", "score", "night_of"}
+    assert upcoming[0]["night_of"] == "2026-01-15"
+    assert upcoming[0]["score"] == coordinator.data[0].hourly_scores[1].breakdown.total
+
+
+async def test_current_conditions_upcoming_present_when_state_unknown(hass, freezer):
+    # The whole point of "upcoming": it must still be there when the
+    # sensor itself is unknown, since that's exactly when the card needs
+    # a "come back later" fallback. 23:30 is outside every scored hour
+    # tonight, but tomorrow/night+2 still have future hours.
+    freezer.move_to("2026-01-15 23:30:00")
+    await hass.config.async_set_time_zone("Europe/London")
+
+    entry = await _setup_entry(hass)
+
+    state = get_state(hass, current_conditions_unique_id(entry))
+    assert state.state == "unknown"
+    upcoming = state.attributes["upcoming"]
+    assert len(upcoming) > 0
+    assert upcoming[0]["time"] == "2026-01-16T20:00:00"
+
+
+async def test_current_conditions_upcoming_empty_list_not_missing_when_nothing_left(
+    hass, freezer
+):
+    # Frozen after every scored hour in the fixture across all three
+    # nights -- upcoming should be an empty list (still present as a
+    # key), not absent, so the card doesn't have to guess between "no
+    # data yet" and "genuinely nothing upcoming".
+    freezer.move_to("2026-01-17 23:30:00")
+    await hass.config.async_set_time_zone("Europe/London")
+
+    entry = await _setup_entry(hass)
+
+    state = get_state(hass, current_conditions_unique_id(entry))
+    assert "upcoming" in state.attributes
+    assert state.attributes["upcoming"] == []
 
 
 async def test_night_sensors_unknown_when_no_darkness_window(hass, freezer):

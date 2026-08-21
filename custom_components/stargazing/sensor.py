@@ -38,8 +38,11 @@ from .coordinator import (
     HourlyScore,
     NightlyScore,
     StargazingCoordinator,
+    UpcomingHourlyScore,
     current_hourly_score,
+    upcoming_hourly_scores,
 )
+from .score import ScoreBreakdown
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,6 +80,48 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
         identifiers={(DOMAIN, entry.entry_id)},
         name="Stargazing",
     )
+
+
+def _breakdown_dict(breakdown: ScoreBreakdown) -> dict:
+    """The nine factor sub-scores as a plain dict, shared by the
+    current-conditions sensor's top-level attributes and each night
+    sensor's per-hour `forecast` entries, so the two never drift apart
+    on field names."""
+    return {
+        "low_cloud": breakdown.low_cloud,
+        "mid_cloud": breakdown.mid_cloud,
+        "high_cloud": breakdown.high_cloud,
+        "dew_point_spread": breakdown.dew_point_spread,
+        "visibility": breakdown.visibility,
+        "jet_stream_wind": breakdown.jet_stream_wind,
+        "moon_illumination": breakdown.moon_illumination,
+        "precipitation_probability": breakdown.precipitation_probability,
+        "wind_speed": breakdown.wind_speed,
+    }
+
+
+def _forecast_entry(hourly_score: HourlyScore) -> dict:
+    """One scored hour as a dict for the `forecast` attribute -- time,
+    total score, and the nine factor sub-scores. This is what the
+    forecast card's tap-to-see-breakdown renders (see README.md's card
+    design spec)."""
+    return {
+        "time": hourly_score.time.isoformat(),
+        "score": hourly_score.breakdown.total,
+        **_breakdown_dict(hourly_score.breakdown),
+    }
+
+
+def _upcoming_entry(item: UpcomingHourlyScore) -> dict:
+    """One future scored hour as a dict for the `upcoming` attribute --
+    deliberately just time/score/night_of (not the full breakdown): this
+    backs the current-conditions card's "next best hour" fallback line,
+    which only needs enough to say *when* and *how good*, not why."""
+    return {
+        "time": item.hourly_score.time.isoformat(),
+        "score": item.hourly_score.breakdown.total,
+        "night_of": item.night_of.isoformat(),
+    }
 
 
 class StargazingNightScoreSensor(CoordinatorEntity[StargazingCoordinator], SensorEntity):
@@ -125,6 +170,7 @@ class StargazingNightScoreSensor(CoordinatorEntity[StargazingCoordinator], Senso
         attrs: dict = {
             "night_of": night.night_of.isoformat(),
             "hourly_scores_count": len(night.hourly_scores),
+            "forecast": [_forecast_entry(hs) for hs in night.hourly_scores],
         }
         if night.window is not None:
             attrs["window_start"] = night.window.start.isoformat()
@@ -154,6 +200,7 @@ class StargazingCurrentConditionsSensor(
         self._attr_unique_id = f"{entry.entry_id}_current_conditions"
         self._attr_device_info = _device_info(entry)
         self._current_score: HourlyScore | None = None
+        self._upcoming: list[UpcomingHourlyScore] = []
 
     async def async_added_to_hass(self) -> None:
         """Compute the active hour once at startup -- this HA version's
@@ -167,33 +214,40 @@ class StargazingCurrentConditionsSensor(
         sensor could keep showing the previous hour's score. Registered
         via async_on_remove so it's torn down on unload/reload."""
         await super().async_added_to_hass()
-        self._current_score = self._compute_current()
+        self._current_score, self._upcoming = self._compute_current_and_upcoming()
         self.async_on_remove(
             async_track_time_change(self.hass, self._hour_rollover, minute=0, second=0)
         )
 
     @callback
     def _hour_rollover(self, _now: datetime | None = None) -> None:
-        """Recompute the active hour at each local hour boundary and
-        write the new state -- even when the coordinator hasn't polled
-        since the last hour (see async_added_to_hass)."""
-        self._current_score = self._compute_current()
+        """Recompute the active hour (and upcoming list, since "upcoming"
+        shrinks by one entry every time an hour rolls into "current") at
+        each local hour boundary and write the new state -- even when
+        the coordinator hasn't polled since the last hour (see
+        async_added_to_hass)."""
+        self._current_score, self._upcoming = self._compute_current_and_upcoming()
         self.async_write_ha_state()
 
     def _handle_coordinator_update(self) -> None:
-        """Recompute the active hour once per coordinator update, then
+        """Recompute current + upcoming once per coordinator update, then
         let CoordinatorEntity write the new state -- avoids calling
-        current_hourly_score() twice (native_value + attributes) and
-        evaluating dt_util.now() separately in each."""
-        self._current_score = self._compute_current()
+        current_hourly_score()/upcoming_hourly_scores() twice
+        (native_value + attributes) and evaluating dt_util.now()
+        separately in each."""
+        self._current_score, self._upcoming = self._compute_current_and_upcoming()
         super()._handle_coordinator_update()
 
-    def _compute_current(self) -> HourlyScore | None:
+    def _compute_current_and_upcoming(
+        self,
+    ) -> tuple[HourlyScore | None, list[UpcomingHourlyScore]]:
         data = self.coordinator.data
         if data is None:
-            return None
+            return None, []
         now_naive = dt_util.now().replace(tzinfo=None)
-        return current_hourly_score(data, now_naive)
+        current = current_hourly_score(data, now_naive)
+        upcoming = upcoming_hourly_scores(data, now_naive)
+        return current, upcoming
 
     @property
     def native_value(self) -> float | None:
@@ -204,20 +258,16 @@ class StargazingCurrentConditionsSensor(
 
     @property
     def extra_state_attributes(self) -> dict:
+        # "upcoming" is always present, even with no active hour --
+        # that's precisely when the current-conditions card needs it
+        # for its "come back later, best upcoming hour is..." fallback
+        # (see README.md's card design spec).
+        attrs: dict = {"upcoming": [_upcoming_entry(item) for item in self._upcoming]}
+
         current = self._current_score
         if current is None:
-            return {}
+            return attrs
 
-        breakdown = current.breakdown
-        return {
-            "time": current.time.isoformat(),
-            "low_cloud": breakdown.low_cloud,
-            "mid_cloud": breakdown.mid_cloud,
-            "high_cloud": breakdown.high_cloud,
-            "dew_point_spread": breakdown.dew_point_spread,
-            "visibility": breakdown.visibility,
-            "jet_stream_wind": breakdown.jet_stream_wind,
-            "moon_illumination": breakdown.moon_illumination,
-            "precipitation_probability": breakdown.precipitation_probability,
-            "wind_speed": breakdown.wind_speed,
-        }
+        attrs["time"] = current.time.isoformat()
+        attrs.update(_breakdown_dict(current.breakdown))
+        return attrs
