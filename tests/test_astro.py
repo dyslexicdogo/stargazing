@@ -24,6 +24,12 @@ from custom_components.stargazing.astro import (
     moon_illumination_percent,
     moon_position,
 )
+from custom_components.stargazing.const import (
+    TIER_ASTRONOMICAL,
+    TIER_CIVIL,
+    TIER_NAUTICAL,
+    TWILIGHT_TIER_CHOICES,
+)
 
 INVERNESS = Observer(latitude=57.4778, longitude=-4.2247, elevation=0)
 
@@ -110,6 +116,42 @@ class TestGetDarknessWindow:
             tiers=(Depression.ASTRONOMICAL, Depression.NAUTICAL),
         )
         assert window is None
+
+    def test_preferred_darkness_chains_pick_named_tier_when_reachable(self):
+        # When the preferred tier IS reachable (mid-August, astronomical
+        # darkness exists), each config choice uses its named tier -- not
+        # the deepest one. This is the "preferred darkness" semantics: the
+        # choice is real, unlike the old deepest-first behaviour where
+        # nautical/civil never got used while astronomical existed.
+        for tier_name, expected in (
+            (TIER_ASTRONOMICAL, Depression.ASTRONOMICAL),
+            (TIER_NAUTICAL, Depression.NAUTICAL),
+            (TIER_CIVIL, Depression.CIVIL),
+        ):
+            window = get_darkness_window(
+                INVERNESS,
+                datetime.date(2026, 8, 15),
+                tzinfo="Europe/London",
+                tiers=TWILIGHT_TIER_CHOICES[tier_name],
+            )
+            assert window is not None, f"{tier_name} should have a window"
+            assert window.tier == expected, (
+                f"{tier_name} should use {expected.name}, got {window.tier.name}"
+            )
+
+    def test_preferred_darkness_falls_back_when_named_tier_unreachable(self):
+        # Summer solstice at Inverness: astronomical AND nautical are
+        # unreachable, so "astronomical" and "nautical" must fall back to
+        # civil (never skip a night); "civil" is civil by definition.
+        for tier_name in (TIER_ASTRONOMICAL, TIER_NAUTICAL, TIER_CIVIL):
+            window = get_darkness_window(
+                INVERNESS,
+                datetime.date(2026, 6, 21),
+                tzinfo="Europe/London",
+                tiers=TWILIGHT_TIER_CHOICES[tier_name],
+            )
+            assert window is not None, f"{tier_name} should never skip a window"
+            assert window.tier == Depression.CIVIL
 
 
 # ---------------------------------------------------------------------------

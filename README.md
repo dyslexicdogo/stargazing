@@ -53,8 +53,8 @@ Lovelace cards (custom:stargazing-forecast-card,
 - Two-step config flow — location (defaults to your HA location) then a
   preset + twilight-tier pick, with presets available **from day one**
 - Three scoring presets: Strict / Balanced / Relaxed
-- Three twilight tiers: Astronomical-only / Nautical-minimum /
-  Civil-minimum
+- Three "preferred darkness" night types: Astronomical (default) /
+  Nautical / Civil
 - Four sensors: tonight, tomorrow night, night+2 peaks, plus current
   conditions
 - Current-conditions sensor rolls over at each local hour boundary —
@@ -103,13 +103,23 @@ baseline (not hand-picked numbers), so they're honest about being
 unvalidated against real nights and cheap to re-tune later. Presets tune
 how *strict* you are; per-factor *weights* stay the same across presets.
 
-### Twilight tiers
+### Night type (preferred darkness)
 
-| Tier | Darkness definition |
-|---|---|
-| Astronomical only | Sun below −18° (sky fully dark) |
-| Nautical minimum | Includes nautical twilight (−12°) |
-| Civil minimum | Includes civil twilight (−6°) — longest windows |
+The night type is a *preference*: the darkest tier you choose is used
+whenever it's reachable, otherwise the window falls back to a shallower
+tier so a night is never skipped. Example scored-hour counts for Inverness
+in August: astronomical ~3h, nautical ~6h, civil ~8h.
+
+| Night type | Window used (fallback chain) | Example (Inverness, August) |
+|---|---|---|
+| **Astronomical** (default) | Astronomical → Nautical → Civil | ~3h (darkest-first, never misses a window) |
+| **Nautical** | Nautical → Civil | ~6h |
+| **Civil** | Civil only | ~8h (most hours) |
+
+Where the sun reaches −18° every night (e.g. Scottish winter), all three
+resolve to astronomical darkness — the choice matters most in summer,
+when astronomical/nautical darkness can disappear entirely and only the
+fallback keeps a window.
 
 ## Requirements
 
@@ -143,8 +153,10 @@ how *strict* you are; per-factor *weights* stay the same across presets.
 2. Search for **Stargazing**
 3. **Step 1 — Location**: latitude/longitude/elevation, pre-filled with
    your Home Assistant location
-4. **Step 2 — Preset & twilight tier**: pick Strict/Balanced/Relaxed and
-   how dark "dark enough" must be
+4. **Step 2 — Preset & night type**: pick Strict/Balanced/Relaxed and
+   your preferred darkness — Astronomical (darkest, default), Nautical, or
+   Civil (most hours). The darkest choice is used when reachable; the
+   window falls back to a shallower tier so a night is never skipped.
 
 You'll end up with four sensors:
 `sensor.stargazing_tonight`, `sensor.stargazing_tomorrow_night`,

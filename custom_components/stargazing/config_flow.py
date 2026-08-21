@@ -7,7 +7,7 @@ alive for the whole wizard, same pattern as sun_bathing's config_flow.py):
    home coordinates, validated with a REAL Open-Meteo call (reusing the
    already-tested client.py, not a separate validation path)
 2. async_step_preset -- strict/balanced/relaxed + twilight tier
-   (astronomical/nautical/civil minimum), then creates the entry
+   (astronomical/nautical/civil, preferred darkness), then creates the entry
 
 Full per-factor threshold/span/weight editing is NOT here -- that's
 Phase 10's options flow with collapsible sections. This is only the

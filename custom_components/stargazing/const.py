@@ -13,16 +13,21 @@ PRESET_RELAXED = "relaxed"
 PRESETS = (PRESET_STRICT, PRESET_BALANCED, PRESET_RELAXED)
 DEFAULT_PRESET = PRESET_BALANCED
 
-TIER_ASTRONOMICAL_ONLY = "astronomical_only"
-TIER_NAUTICAL_MINIMUM = "nautical_minimum"
-TIER_CIVIL_MINIMUM = "civil_minimum"
+TIER_ASTRONOMICAL = "astronomical"
+TIER_NAUTICAL = "nautical"
+TIER_CIVIL = "civil"
 
-# Maps a user-facing "minimum acceptable darkness" choice to the actual
-# fallback chain get_darkness_window() tries, in order. See astro.py --
-# this was designed to support exactly this config option back in Phase 4.
+# Maps a user-facing "preferred darkness" choice to the fallback chain
+# get_darkness_window() tries, in order -- PREFERRED depth first, then
+# progressively shallower tiers, so a night is never skipped just because
+# the darkest tier is unreachable (e.g. Inverness's summer solstice, where
+# astronomical/nautical darkness don't occur). "astronomical" prefers the
+# darkest sky but accepts nautical/civil when needed; "civil" is the
+# shallowest, longest window and has nothing further to fall back to.
+# See PROJECT_PRINCIPLES.md / README "Twilight tiers".
 TWILIGHT_TIER_CHOICES: dict[str, tuple[Depression, ...]] = {
-    TIER_ASTRONOMICAL_ONLY: (Depression.ASTRONOMICAL,),
-    TIER_NAUTICAL_MINIMUM: (Depression.ASTRONOMICAL, Depression.NAUTICAL),
-    TIER_CIVIL_MINIMUM: (Depression.ASTRONOMICAL, Depression.NAUTICAL, Depression.CIVIL),
+    TIER_ASTRONOMICAL: (Depression.ASTRONOMICAL, Depression.NAUTICAL, Depression.CIVIL),
+    TIER_NAUTICAL: (Depression.NAUTICAL, Depression.CIVIL),
+    TIER_CIVIL: (Depression.CIVIL,),
 }
-DEFAULT_TWILIGHT_TIER = TIER_CIVIL_MINIMUM  # matches the "never miss a window" preference
+DEFAULT_TWILIGHT_TIER = TIER_ASTRONOMICAL  # darkest-first, never miss a window

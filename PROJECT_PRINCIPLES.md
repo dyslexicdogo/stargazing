@@ -50,6 +50,12 @@ Each factor is scored 0–100 (higher = better) and combined into a weighted
 
 - **Moon phase**: RESOLVED → numeric illumination % via `astral`/`skyfield`
   (not HA's discrete 8-phase `sensor.moon`).
+- **Night type / twilight tier**: RESOLVED → the config choice is
+  "preferred darkness" with fallback (astronomical → nautical → civil),
+  not "minimum acceptable" deepest-first. The darkest chosen tier is used
+  when reachable; otherwise it falls back so a night is never skipped.
+  This makes the choice real: in August at Inverness it spans ~3h
+  (astronomical) to ~8h (civil) scored hours per night.
 - **Ozone**: deferred — the air-quality endpoint exists but ozone is not
   in the current 9-factor breakdown; revisit when real nights have been
   validated against the existing factors.

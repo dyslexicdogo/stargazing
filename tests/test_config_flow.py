@@ -18,9 +18,11 @@ from custom_components.stargazing.client import BASE_URL
 from custom_components.stargazing.const import (
     CONF_PRESET,
     CONF_TWILIGHT_TIER,
+    DEFAULT_TWILIGHT_TIER,
     DOMAIN,
     PRESET_STRICT,
-    TIER_ASTRONOMICAL_ONLY,
+    TIER_ASTRONOMICAL,
+    TWILIGHT_TIER_CHOICES,
 )
 
 URL_PATTERN = re.compile(rf"^{re.escape(BASE_URL)}.*$")
@@ -64,7 +66,7 @@ async def test_full_flow_creates_entry_with_valid_location(hass):
             result["flow_id"],
             {
                 CONF_PRESET: PRESET_STRICT,
-                CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL_ONLY,
+                CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL,
             },
         )
 
@@ -72,9 +74,40 @@ async def test_full_flow_creates_entry_with_valid_location(hass):
     assert result["data"]["latitude"] == 57.4778
     assert result["data"]["longitude"] == -4.2247
     assert result["data"][CONF_PRESET] == PRESET_STRICT
-    assert result["data"][CONF_TWILIGHT_TIER] == TIER_ASTRONOMICAL_ONLY
+    assert result["data"][CONF_TWILIGHT_TIER] == TIER_ASTRONOMICAL
     assert "score_config" in result["data"]
     assert set(result["data"]["score_config"]) == {"edges", "spans", "weights"}
+
+
+async def test_twilight_tier_defaults_to_astronomical(hass):
+    # The preset step defaults to the darkest preference (astronomical);
+    # submitting without choosing a tier stores that default.
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD)
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"latitude": 57.4778, "longitude": -4.2247, "elevation": 10.0},
+        )
+        assert result["step_id"] == "preset"
+        # the form exposes the new preferred-darkness options
+        assert set(TWILIGHT_TIER_CHOICES) == {
+            "astronomical",
+            "nautical",
+            "civil",
+        }
+        assert DEFAULT_TWILIGHT_TIER == "astronomical"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_PRESET: PRESET_STRICT},  # omit the tier -> default applies
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_TWILIGHT_TIER] == DEFAULT_TWILIGHT_TIER
 
 
 async def test_invalid_location_stays_on_user_step_with_error(hass):
@@ -130,7 +163,7 @@ async def test_preset_data_matches_get_preset_values(hass):
             result["flow_id"],
             {
                 CONF_PRESET: PRESET_STRICT,
-                CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL_ONLY,
+                CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL,
             },
         )
 
@@ -206,7 +239,7 @@ async def test_duplicate_location_aborts(hass):
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_PRESET: PRESET_STRICT, CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL_ONLY},
+            {CONF_PRESET: PRESET_STRICT, CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL},
         )
         assert result["type"] == FlowResultType.CREATE_ENTRY
 

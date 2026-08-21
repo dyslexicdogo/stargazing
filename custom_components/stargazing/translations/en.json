@@ -12,10 +12,10 @@
       },
       "preset": {
         "title": "Scoring preset",
-        "description": "Choose how strict the scoring should be, and the minimum darkness you consider usable.",
+        "description": "Choose how strict the scoring should be, and your preferred darkness for a usable night. The darkest chosen tier is used when it's reachable; otherwise the window falls back to a shallower one so a night is never skipped.",
         "data": {
           "preset": "Preset",
-          "twilight_tier": "Minimum acceptable darkness"
+          "twilight_tier": "Preferred darkness (night type)"
         }
       }
     },

@@ -140,6 +140,45 @@ def current_hourly_score(
     return None
 
 
+@dataclass
+class UpcomingHourlyScore:
+    """One future scored hour plus which night it belongs to -- HourlyScore
+    on its own doesn't carry night_of, and the current-conditions card's
+    "next best hour" fallback needs it (e.g. "next best hour: tomorrow
+    night, 21:00, 72") so it can label results usefully across a
+    multi-night boundary."""
+
+    night_of: date
+    hourly_score: HourlyScore
+
+
+def upcoming_hourly_scores(
+    nightly_scores: list[NightlyScore], now: datetime
+) -> list[UpcomingHourlyScore]:
+    """Every scored hour strictly after `now`, across all nights, sorted
+    chronologically, for the current-conditions card's "next best hour"
+    fallback when no hour is currently active.
+
+    `now` must be naive local time, same requirement as
+    current_hourly_score() -- see its docstring and the module
+    docstring's TIMEZONE HANDLING note.
+
+    Deliberately not filtered/reduced to just the single best hour here:
+    that's a display decision (the card may want to show more than one
+    option, or pick "best" by a different rule later), so this stays as
+    plain data and the card/sensor layer decides what to do with it --
+    same "coordinator/helpers stay dumb" principle as everywhere else.
+    """
+    upcoming = [
+        UpcomingHourlyScore(night_of=night.night_of, hourly_score=hourly_score)
+        for night in nightly_scores
+        for hourly_score in night.hourly_scores
+        if hourly_score.time > now
+    ]
+    upcoming.sort(key=lambda item: item.hourly_score.time)
+    return upcoming
+
+
 def determine_night_of(now: datetime) -> date:
     """Decide which night's darkness window applies right now.
 

@@ -31,8 +31,7 @@ from custom_components.stargazing.const import (
     CONF_TWILIGHT_TIER,
     DOMAIN,
     PRESET_BALANCED,
-    TIER_ASTRONOMICAL_ONLY,
-    TIER_CIVIL_MINIMUM,
+    TIER_ASTRONOMICAL,
 )
 from custom_components.stargazing.presets import get_preset_values
 
@@ -65,12 +64,16 @@ VALID_PAYLOAD = {
 }
 
 
-def make_entry(twilight_tier: str = TIER_CIVIL_MINIMUM) -> MockConfigEntry:
+def make_entry(
+    twilight_tier: str = TIER_ASTRONOMICAL,
+    latitude: float = 57.4778,
+    longitude: float = -4.2247,
+) -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         data={
-            "latitude": 57.4778,
-            "longitude": -4.2247,
+            "latitude": latitude,
+            "longitude": longitude,
             "elevation": 10.0,
             CONF_PRESET: PRESET_BALANCED,
             CONF_TWILIGHT_TIER: twilight_tier,
@@ -278,15 +281,16 @@ async def test_current_conditions_state_none_outside_scored_hours(hass, freezer)
 
 
 async def test_night_sensors_unknown_when_no_darkness_window(hass, freezer):
-    # Inverness on the summer solstice with astronomical-only tiers: the
-    # sun never reaches -18 degrees at all, so every night's window is
-    # None. sensor.py must fail soft -- peak sensors unknown, window
-    # attributes None, no crash -- not just the coordinator (which is
-    # already covered in test_coordinator.py).
+    # A genuine polar-day observer (Tromsø) on the summer solstice: the
+    # sun never reaches even civil twilight, so EVERY night's window is
+    # None for every preferred-darkness tier (even "astronomical" with
+    # its nautical/civil fallback). sensor.py must fail soft -- peak
+    # sensors unknown, window attributes None, no crash -- not just the
+    # coordinator (which is already covered in test_coordinator.py).
     freezer.move_to("2026-06-20 20:00:00")
     await hass.config.async_set_time_zone("Europe/London")
 
-    entry = make_entry(twilight_tier=TIER_ASTRONOMICAL_ONLY)
+    entry = make_entry(latitude=69.6, longitude=18.9)
     entry.add_to_hass(hass)
     with aioresponses() as mocked:
         mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)

@@ -21,7 +21,7 @@ from custom_components.stargazing.const import (
     CONF_TWILIGHT_TIER,
     DOMAIN,
     PRESET_BALANCED,
-    TIER_CIVIL_MINIMUM,
+    TIER_ASTRONOMICAL,
 )
 from custom_components.stargazing.coordinator import StargazingCoordinator
 from custom_components.stargazing.presets import get_preset_values
@@ -53,7 +53,7 @@ def make_entry() -> MockConfigEntry:
             "longitude": -4.2247,
             "elevation": 10.0,
             CONF_PRESET: PRESET_BALANCED,
-            CONF_TWILIGHT_TIER: TIER_CIVIL_MINIMUM,
+            CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL,
             "score_config": get_preset_values(PRESET_BALANCED),
         },
     )
