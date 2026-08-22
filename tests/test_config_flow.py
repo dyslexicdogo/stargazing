@@ -8,9 +8,10 @@ client.py's real code path during location validation, matching the
 """
 
 import re
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import voluptuous_serialize
 from aioresponses import aioresponses
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
@@ -18,6 +19,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.stargazing.client import BASE_URL
 from custom_components.stargazing.const import (
+    CONF_NOTIFY_CHECK_TIME,
+    CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_SCORE_THRESHOLD,
+    CONF_NOTIFY_TARGET,
     CONF_PRESET,
     CONF_SCORE_CONFIG,
     CONF_TWILIGHT_TIER,
@@ -260,21 +265,31 @@ async def test_options_wizard_full_walkthrough(hass):
     )
     assert result["step_id"] == "weights"
 
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "low_cloud": 4.0,
+            "mid_cloud": 2.0,
+            "high_cloud": 1.0,
+            "dew_point_spread": 2.0,
+            "visibility": 1.0,
+            "jet_stream_wind": 1.0,
+            "moon_illumination": 3.0,
+            "precipitation_probability": 2.0,
+            "wind_speed": 1.0,
+        },
+    )
+    assert result["step_id"] == "notify_setup"
+
     # Finishing schedules an automatic reload (OptionsFlowWithReload); the
     # wizard itself must not depend on one happening inside the flow.
     with patch.object(hass.config_entries, "async_schedule_reload"):
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
             {
-                "low_cloud": 4.0,
-                "mid_cloud": 2.0,
-                "high_cloud": 1.0,
-                "dew_point_spread": 2.0,
-                "visibility": 1.0,
-                "jet_stream_wind": 1.0,
-                "moon_illumination": 3.0,
-                "precipitation_probability": 2.0,
-                "wind_speed": 1.0,
+                CONF_NOTIFY_ENABLED: False,
+                CONF_NOTIFY_SCORE_THRESHOLD: 70.0,
+                CONF_NOTIFY_CHECK_TIME: "19:30",
             },
         )
 
@@ -324,6 +339,242 @@ async def test_options_preset_change_resets_to_new_preset_defaults(hass):
     defaults = form_defaults(result)
     strict_edges = get_preset_values(PRESET_STRICT)["edges"]
     assert defaults["low_cloud_max"] == strict_edges["low_cloud_max"]
+
+
+async def test_options_notify_disabled_finishes_without_target_page(hass):
+    entry = make_options_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_PRESET: PRESET_BALANCED}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"low_cloud_max": 20.0, "mid_cloud_max": 20.0, "high_cloud_max": 20.0},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "dew_point_spread_min": 5.0,
+            "visibility_min": 20000.0,
+            "jet_stream_wind_max": 30.0,
+            "moon_illumination_max": 25.0,
+            "precipitation_probability_max": 20.0,
+            "wind_speed_max": 20.0,
+        },
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        dict.fromkeys(
+            (
+                "low_cloud_max",
+                "mid_cloud_max",
+                "high_cloud_max",
+                "dew_point_spread_min",
+                "visibility_min",
+                "jet_stream_wind_max",
+                "moon_illumination_max",
+                "precipitation_probability_max",
+                "wind_speed_max",
+            ),
+            10.0,
+        ),
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        dict.fromkeys(
+            (
+                "low_cloud",
+                "mid_cloud",
+                "high_cloud",
+                "dew_point_spread",
+                "visibility",
+                "jet_stream_wind",
+                "moon_illumination",
+                "precipitation_probability",
+                "wind_speed",
+            ),
+            3.0,
+        ),
+    )
+    assert result["step_id"] == "notify_setup"
+
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NOTIFY_ENABLED: False,
+                CONF_NOTIFY_SCORE_THRESHOLD: 80.0,
+                CONF_NOTIFY_CHECK_TIME: "20:00",
+            },
+        )
+
+    # Disabled -> straight to create_entry; the target page never shows.
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_NOTIFY_ENABLED] is False
+    assert CONF_NOTIFY_TARGET not in result["data"]
+
+
+async def test_options_notify_enabled_requires_existing_notify_entities(hass):
+    entry = make_options_entry(hass)
+    # No notify entities registered anywhere in this hass instance.
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    for payload in (
+        {CONF_PRESET: PRESET_BALANCED},
+        {CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL},
+        {"low_cloud_max": 20.0, "mid_cloud_max": 20.0, "high_cloud_max": 20.0},
+    ):
+        result = await hass.config_entries.options.async_configure(result["flow_id"], payload)
+
+    # sky_thresholds page: defaults are fine, just resubmit them
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        form_defaults(result),
+    )
+    # falloff_spans page
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        form_defaults(result),
+    )
+    # weights page
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        form_defaults(result),
+    )
+    assert result["step_id"] == "notify_setup"
+
+    # The persistent_notification fallback means the real target list is
+    # never empty; force it empty to prove the guard still bounces with
+    # the translated error instead of saving an undeliverable config.
+    with patch(
+        "custom_components.stargazing.config_flow.list_notify_entities",
+        return_value=[],
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NOTIFY_ENABLED: True,
+                CONF_NOTIFY_SCORE_THRESHOLD: 75.0,
+                CONF_NOTIFY_CHECK_TIME: "21:00",
+            },
+        )
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "notify_setup"
+    assert result["errors"] == {"base": "no_notify_entities"}
+
+    # Now register a notify service and retry -- should advance to target
+    # pick, defaulting to the always-present fallback.
+    hass.services.async_register("notify", "mobile_app_test", AsyncMock(return_value=True))
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NOTIFY_ENABLED: True,
+            CONF_NOTIFY_SCORE_THRESHOLD: 75.0,
+            CONF_NOTIFY_CHECK_TIME: "21:00",
+        },
+    )
+    assert result["step_id"] == "notify_target"
+    assert (
+        result["data_schema"]({})[CONF_NOTIFY_TARGET] == "persistent_notification.create"
+    )
+
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_NOTIFY_TARGET: "notify.mobile_app_test"}
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_NOTIFY_ENABLED] is True
+    assert result["data"][CONF_NOTIFY_TARGET] == "notify.mobile_app_test"
+    assert result["data"][CONF_NOTIFY_CHECK_TIME] == "21:00"
+
+
+# ---------------------------------------------------------------------------
+# Frontend-serializability regression ("Unknown error occurred" bug)
+# ---------------------------------------------------------------------------
+
+
+def assert_form_serializable(result):
+    """HA's websocket layer converts every shown schema with
+    voluptuous_serialize; anything it rejects 500s the real UI as
+    'Unknown error occurred'. This is exactly how a vol.Match time
+    validator slipped past in-process-only tests."""
+    voluptuous_serialize.convert(result["data_schema"])
+
+
+async def test_options_every_form_is_frontend_serializable(hass):
+    """Walk all eight pages asserting each schema converts for the UI."""
+    hass.services.async_register("notify", "mobile_app_test", AsyncMock(return_value=True))
+    entry = make_options_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    seen_steps = []
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        while result["type"] == FlowResultType.FORM:
+            assert_form_serializable(result)
+            seen_steps.append(result["step_id"])
+            payload = form_defaults(result)
+            if result["step_id"] == "notify_setup":
+                # Enable so the target page is reached and checked too.
+                payload[CONF_NOTIFY_ENABLED] = True
+            if result["step_id"] == "notify_target":
+                # Pick the registered service rather than the fallback so
+                # the final assertion proves registry discovery worked.
+                payload[CONF_NOTIFY_TARGET] = "notify.mobile_app_test"
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], payload
+            )
+            assert len(seen_steps) < 12, "wizard looped forever"
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert seen_steps == [
+        "init",
+        "night",
+        "cloud_thresholds",
+        "sky_thresholds",
+        "falloff_spans",
+        "weights",
+        "notify_setup",
+        "notify_target",
+    ]
+    assert result["data"][CONF_NOTIFY_TARGET] == "notify.mobile_app_test"
+
+
+async def test_options_notify_invalid_time_reshows_with_field_error(hass):
+    hass.services.async_register("notify", "mobile_app_test", AsyncMock(return_value=True))
+    entry = make_options_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    for payload in (
+        {CONF_PRESET: PRESET_BALANCED},
+        {CONF_TWILIGHT_TIER: TIER_ASTRONOMICAL},
+        {"low_cloud_max": 20.0, "mid_cloud_max": 20.0, "high_cloud_max": 20.0},
+    ):
+        result = await hass.config_entries.options.async_configure(result["flow_id"], payload)
+    for _ in range(3):  # sky_thresholds, falloff_spans, weights -- defaults fine
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], form_defaults(result)
+        )
+    assert result["step_id"] == "notify_setup"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NOTIFY_ENABLED: True,
+            CONF_NOTIFY_SCORE_THRESHOLD: 70.0,
+            CONF_NOTIFY_CHECK_TIME: "25:99",
+        },
+    )
+
+    # Bad HH:MM must re-show the SAME page with a translated field error,
+    # never crash and never advance to the target picker.
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "notify_setup"
+    assert result["errors"] == {CONF_NOTIFY_CHECK_TIME: "invalid_time"}
 
 
 async def test_invalid_latitude_range_shows_field_error(hass):

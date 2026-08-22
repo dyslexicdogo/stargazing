@@ -96,13 +96,16 @@ Each factor is scored 0–100 (higher = better) and combined into a weighted
     by user preference: preset → night type → cloud thresholds → sky
     thresholds → falloff spans → weights)
 11. **Notifications + HACS packaging** — same proven pattern
+    (notifications shipped via wizard pages + `notifications.py`;
+    HACS packaging still pending)
 
 ### Current status
 
-- **Done:** Phases 1–10. 146 tests passing. `scripts/develop` boots HA with
-  the integration loaded; the config flow and the options wizard are
-  verified working in the live UI.
-- **Pending:** Phase 11 (notifications + HACS packaging), plus the
+- **Done:** Phases 1–11 (notifications). 179 tests passing.
+  `scripts/develop` boots HA with the integration loaded; the config
+  flow, options wizard, and nightly-notification arming are verified
+  working in the live UI.
+- **Pending:** HACS packaging (the last slice of old Phase 11), plus the
   follow-ups listed below.
 
 ### Flagged follow-ups

@@ -37,6 +37,19 @@ TWILIGHT_TIER_CHOICES: dict[str, tuple[Depression, ...]] = {
 }
 DEFAULT_TWILIGHT_TIER = TIER_ASTRONOMICAL  # darkest-first, never miss a window
 
+# --- Notifications (Phase 11) --------------------------------------------
+# All four live in entry.options (written by the options wizard's two
+# notification pages); _notify_settings() in __init__.py reads them back
+# with these defaults as the fallback, options winning over data.
+CONF_NOTIFY_ENABLED = "notify_enabled"
+CONF_NOTIFY_SCORE_THRESHOLD = "notify_score_threshold"
+CONF_NOTIFY_CHECK_TIME = "notify_check_time"  # local wall clock, "HH:MM"
+CONF_NOTIFY_TARGET = "notify_target"  # a notify.* entity id
+
+DEFAULT_NOTIFY_ENABLED = False
+DEFAULT_NOTIFY_SCORE_THRESHOLD = 70.0
+DEFAULT_NOTIFY_CHECK_TIME = "19:00"
+
 # Lovelace card resources this integration ships from www/. Keyed by
 # filename so the registration loop in __init__.py can add more cards
 # later without touching the loop itself -- just add an entry here.

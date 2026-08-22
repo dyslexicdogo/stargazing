@@ -1,0 +1,11 @@
+when user want to test notification, they can use notify.persistent_notification for quick testing 
+
+please remove 
+
+
+NOT used in this repo:
+- **AstroWeather** and the **AstroWeather Card** by
+  [@mawinkler](https://github.com/mawinkler) — the "percent good per
+  factor" visualization and dense single-panel readouts inspired our
+  per-factor color coding and the forecast card's breakdown panel.
+

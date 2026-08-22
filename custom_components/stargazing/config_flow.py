@@ -9,14 +9,15 @@ alive for the whole wizard, same pattern as sun_bathing's config_flow.py):
 2. async_step_preset -- strict/balanced/relaxed + twilight tier
    (astronomical/nautical/civil, preferred darkness), then creates the entry
 
-OPTIONS WIZARD (Phase 10) -- StargazingOptionsFlowHandler below runs six
-sequential pages, one concern each, rather than one overwhelming form:
-preset -> night type -> cloud thresholds -> sky thresholds ->
-falloff spans -> weights. Same chaining pattern as the setup flow.
+OPTIONS WIZARD (Phase 10/11) -- StargazingOptionsFlowHandler below runs
+eight sequential pages, one concern each, rather than one overwhelming
+form: preset -> night type -> cloud thresholds -> sky thresholds ->
+falloff spans -> weights -> notifications on/off -> (if on) notify
+target. Same chaining pattern as the setup flow.
 Saving triggers an automatic entry reload via OptionsFlowWithReload,
-which rebuilds the coordinator with the new numbers (the integration has
-no update listeners, which is the one precondition for using that base
-class).
+which rebuilds the coordinator with the new numbers AND re-arms the
+notification timer from scratch (the integration has no update
+listeners, which is the one precondition for using that base class).
 
 Prefill rule across wizard reruns (deliberate, see handler docstring):
 keeping your current preset preserves stored customizations; picking a
@@ -46,15 +47,23 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import OpenMeteoClient, OpenMeteoError
 from .const import (
+    CONF_NOTIFY_CHECK_TIME,
+    CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_SCORE_THRESHOLD,
+    CONF_NOTIFY_TARGET,
     CONF_PRESET,
     CONF_SCORE_CONFIG,
     CONF_TWILIGHT_TIER,
+    DEFAULT_NOTIFY_CHECK_TIME,
+    DEFAULT_NOTIFY_ENABLED,
+    DEFAULT_NOTIFY_SCORE_THRESHOLD,
     DEFAULT_PRESET,
     DEFAULT_TWILIGHT_TIER,
     DOMAIN,
     PRESETS,
     TWILIGHT_TIER_CHOICES,
 )
+from .notifications import list_notify_entities, parse_check_time
 from .presets import (
     config_entry_to_score_config,
     get_preset_values,
@@ -323,12 +332,8 @@ class StargazingOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     async def async_step_weights(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
             self._working["weights"].update(user_input)
-            # OptionsFlowWithReload reloads the entry automatically after
-            # this returns, rebuilding the coordinator with these numbers.
-            return self.async_create_entry(
-                title="",
-                data={**self._options, CONF_SCORE_CONFIG: self._working},
-            )
+            # Scoring done -- on to the notification pages (7 and 8).
+            return await self.async_step_notify_setup()
 
         return self.async_show_form(
             step_id="weights",
@@ -338,3 +343,108 @@ class StargazingOptionsFlowHandler(config_entries.OptionsFlowWithReload):
                 {name: _WEIGHT_RANGE for name in _WEIGHT_FIELDS},
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Notification pages (Phase 11)
+    # ------------------------------------------------------------------
+
+    def _notify_default(self, key: str, fallback: Any) -> Any:
+        entry = self.config_entry
+        return entry.options.get(key, entry.data.get(key, fallback))
+
+    def _notify_schema(self) -> vol.Schema:
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_NOTIFY_ENABLED,
+                    default=self._notify_default(CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED),
+                ): vol.Coerce(bool),
+                vol.Required(
+                    CONF_NOTIFY_SCORE_THRESHOLD,
+                    default=float(
+                        self._notify_default(
+                            CONF_NOTIFY_SCORE_THRESHOLD, DEFAULT_NOTIFY_SCORE_THRESHOLD
+                        )
+                    ),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=100.0)),
+                vol.Required(
+                    CONF_NOTIFY_CHECK_TIME,
+                    default=self._notify_default(
+                        CONF_NOTIFY_CHECK_TIME, DEFAULT_NOTIFY_CHECK_TIME
+                    ),
+                    # Plain str ONLY: vol.Match / custom callables break
+                    # voluptuous_serialize -> frontend 500. Format is
+                    # validated inline in async_step_notify_setup.
+                ): str,
+            }
+        )
+
+    def _async_finish_options(self) -> FlowResult:
+        """Shared exit: persist everything the wizard collected.
+        OptionsFlowWithReload reloads the entry automatically after this
+        returns, re-running setup with these numbers."""
+        return self.async_create_entry(
+            title="",
+            data={**self._options, CONF_SCORE_CONFIG: self._working},
+        )
+
+    async def async_step_notify_setup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            # The schema must stay serializable for the frontend --
+            # voluptuous_serialize rejects vol.Match AND custom callables
+            # alike (that 500'd as "Unknown error occurred"), so HH:MM is
+            # validated here instead, re-showing the form with a
+            # translated field error on bad input.
+            try:
+                parse_check_time(user_input[CONF_NOTIFY_CHECK_TIME])
+            except (TypeError, ValueError):
+                return self.async_show_form(
+                    step_id="notify_setup",
+                    data_schema=self._notify_schema(),
+                    errors={CONF_NOTIFY_CHECK_TIME: "invalid_time"},
+                )
+            self._options[CONF_NOTIFY_ENABLED] = user_input[CONF_NOTIFY_ENABLED]
+            self._options[CONF_NOTIFY_SCORE_THRESHOLD] = user_input[
+                CONF_NOTIFY_SCORE_THRESHOLD
+            ]
+            self._options[CONF_NOTIFY_CHECK_TIME] = user_input[CONF_NOTIFY_CHECK_TIME]
+            if not user_input[CONF_NOTIFY_ENABLED]:
+                return self._async_finish_options()
+            if not list_notify_entities(self.hass):
+                # Nothing to deliver notifications WITH -- bounce back with
+                # an actionable error rather than letting a broken target
+                # get saved silently.
+                return self.async_show_form(
+                    step_id="notify_setup",
+                    data_schema=self._notify_schema(),
+                    errors={"base": "no_notify_entities"},
+                )
+            return await self.async_step_notify_target()
+
+        return self.async_show_form(
+            step_id="notify_setup", data_schema=self._notify_schema()
+        )
+
+    async def async_step_notify_target(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            self._options[CONF_NOTIFY_TARGET] = user_input[CONF_NOTIFY_TARGET]
+            return self._async_finish_options()
+
+        choices = list_notify_entities(self.hass)
+        current = self._notify_default(CONF_NOTIFY_TARGET, None)
+        if current and current not in choices:
+            # Chosen entity vanished (integration removed?) since last save;
+            # keep it selectable so the user sees exactly what was set.
+            choices.append(current)
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_NOTIFY_TARGET, default=current or choices[0]
+                ): vol.In(choices)
+            }
+        )
+        return self.async_show_form(step_id="notify_target", data_schema=schema)

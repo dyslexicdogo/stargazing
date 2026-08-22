@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from astral import Observer
 from homeassistant.components.http import StaticPathConfig
@@ -28,13 +29,25 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .client import OpenMeteoClient
 from .const import (
     CARD_RESOURCES,
+    CONF_NOTIFY_CHECK_TIME,
+    CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_SCORE_THRESHOLD,
+    CONF_NOTIFY_TARGET,
     CONF_SCORE_CONFIG,
     CONF_TWILIGHT_TIER,
+    DEFAULT_NOTIFY_CHECK_TIME,
+    DEFAULT_NOTIFY_ENABLED,
+    DEFAULT_NOTIFY_SCORE_THRESHOLD,
     DEFAULT_TWILIGHT_TIER,
     TWILIGHT_TIER_CHOICES,
 )
 from .coordinator import StargazingCoordinator
-from .presets import config_entry_to_score_config, get_preset_values, overlay_score_config
+from .notifications import StargazingNotifier
+from .presets import (
+    config_entry_to_score_config,
+    get_preset_values,
+    overlay_score_config,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -118,6 +131,22 @@ async def _async_register_lovelace_resources(hass: HomeAssistant) -> None:
         await resources.async_create_item({"res_type": "module", "url": url_path})
 
 
+def _notify_settings(entry: StargazingConfigEntry) -> dict[str, Any]:
+    """Effective notification settings: options win over data over defaults.
+
+    Standalone function (like determine_night_of in coordinator.py) so it
+    can be exercised without a full setup."""
+    merged: dict[str, Any] = {}
+    for key, default in (
+        (CONF_NOTIFY_ENABLED, DEFAULT_NOTIFY_ENABLED),
+        (CONF_NOTIFY_SCORE_THRESHOLD, DEFAULT_NOTIFY_SCORE_THRESHOLD),
+        (CONF_NOTIFY_CHECK_TIME, DEFAULT_NOTIFY_CHECK_TIME),
+        (CONF_NOTIFY_TARGET, None),
+    ):
+        merged[key] = entry.options.get(key, entry.data.get(key, default))
+    return merged
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -> bool:
     """Set up stargazing from a config entry."""
     observer = Observer(
@@ -163,6 +192,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -
     await _async_register_frontend(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Notifications (Phase 11): arm the daily threshold check when the
+    # user enabled it. Saving the options wizard reloads this entry
+    # (OptionsFlowWithReload), re-running setup so changed settings
+    # always take effect; the previous timer is cancelled through
+    # async_on_unload during that reload.
+    notify_settings = _notify_settings(entry)
+    if notify_settings[CONF_NOTIFY_ENABLED]:
+        notifier = StargazingNotifier(hass, coordinator, notify_settings)
+        if notifier.arm():
+            entry.async_on_unload(notifier.unsub)
 
     return True
 

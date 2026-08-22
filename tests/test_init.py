@@ -18,6 +18,10 @@ from custom_components.stargazing import async_setup_entry, async_unload_entry
 from custom_components.stargazing.client import BASE_URL
 from custom_components.stargazing.const import (
     CARD_RESOURCES,
+    CONF_NOTIFY_CHECK_TIME,
+    CONF_NOTIFY_ENABLED,
+    CONF_NOTIFY_SCORE_THRESHOLD,
+    CONF_NOTIFY_TARGET,
     CONF_PRESET,
     CONF_SCORE_CONFIG,
     CONF_TWILIGHT_TIER,
@@ -175,6 +179,70 @@ async def test_setup_entry_applies_options_over_data(hass, freezer):
     assert coordinator._spans.low_cloud_max == 60.0  # spans section untouched
     assert coordinator._weights.low_cloud == 5.0  # weights section untouched
     assert coordinator._tiers == TWILIGHT_TIER_CHOICES[TIER_CIVIL]
+
+
+# ---------------------------------------------------------------------------
+# Notification wiring (Phase 11): setup arms / unload cancels
+# ---------------------------------------------------------------------------
+
+
+def notify_options(**overrides):
+    options = {
+        CONF_NOTIFY_ENABLED: True,
+        CONF_NOTIFY_SCORE_THRESHOLD: 70.0,
+        CONF_NOTIFY_CHECK_TIME: "19:30",
+        CONF_NOTIFY_TARGET: "notify.mobile_app_test",
+    }
+    options.update(overrides)
+    return options
+
+
+async def _setup_entry(hass, freezer, options=None):
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+    entry = MockConfigEntry(domain=DOMAIN, data=make_entry().data, options=options)
+    entry.add_to_hass(hass)
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        assert await hass.config_entries.async_setup(entry.entry_id) is True
+    return entry
+
+
+@patch("custom_components.stargazing.notifications.async_track_time_change")
+async def test_setup_arms_notifier_when_enabled(track, hass, freezer):
+    entry = await _setup_entry(hass, freezer, notify_options())
+
+    track.assert_called_once()
+    _, kwargs = track.call_args
+    assert (kwargs["hour"], kwargs["minute"], kwargs["second"]) == (19, 30, 0)
+
+
+@patch("custom_components.stargazing.notifications.async_track_time_change")
+async def test_setup_skips_notifier_when_disabled(track, hass, freezer):
+    # No options at all -> notify disabled by default -> no timer.
+    await _setup_entry(hass, freezer)
+
+    track.assert_not_called()
+
+
+@patch("custom_components.stargazing.notifications.async_track_time_change")
+async def test_setup_skips_notifier_when_target_missing(track, hass, freezer, caplog):
+    await _setup_entry(hass, freezer, notify_options(**{CONF_NOTIFY_TARGET: None}))
+
+    track.assert_not_called()
+    assert "target" in caplog.text
+
+
+@patch("custom_components.stargazing.notifications.async_track_time_change")
+async def test_unload_cancels_notifier_timer(track, hass, freezer):
+    entry = await _setup_entry(hass, freezer, notify_options())
+    cancel = track.return_value
+    cancel.assert_not_called()  # armed, not yet cancelled
+
+    # Unload via the manager: entry.async_on_unload hooks fire only on
+    # manager-driven unload, not on a bare async_unload_entry() call.
+    assert await hass.config_entries.async_unload(entry.entry_id) is True
+    cancel.assert_called_once()
 
 
 async def test_unload_entry_returns_true(hass):

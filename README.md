@@ -58,8 +58,8 @@ Lovelace card (custom:stargazing-forecast-card) — 3-night chart with
   Nautical / Civil
 - Three night sensors: tonight, tomorrow night, and night+2 peaks, each
   with the full per-hour forecast available as attributes
-- 146 passing tests across the client, scoring, windows, coordinator,
-  config flow, and sensors
+- 179 passing tests across the client, scoring, windows, coordinator,
+  config flow, sensors, and notifications
 
 **Built in Phase 9:**
 - `custom:stargazing-forecast-card` — a graphical 3-night score-over-time
@@ -71,8 +71,14 @@ Lovelace card (custom:stargazing-forecast-card) — 3-night chart with
   preset preserves your tuned values, switching preset resets them;
   saving reloads the integration automatically
 
+**Built in Phase 11 (notifications):**
+- Nightly notification when tonight's peak score reaches your threshold —
+  configurable score threshold and check time on two extra wizard pages,
+  delivered through any notify entity (e.g. the Companion App); the check
+  refreshes the forecast first so it decides on fresh data
+
 **Planned:**
-- Notifications + HACS packaging
+- HACS packaging
 
 ## Scoring
 
@@ -252,7 +258,8 @@ resources:
 | 8 | Full integration tests | ✅ |
 | 9 | **Lovelace forecast card** (`custom:stargazing-forecast-card`, served from `www/`) | ✅ |
 | 10 | **Options wizard** — 6 sequential pages: preset / night type / cloud thresholds / sky thresholds / falloff spans / weights | ✅ |
-| 11 | Notifications + HACS packaging | ⏳ |
+| 11 | **Notifications** — daily threshold check via any notify entity, configured on wizard pages 7–8 | ✅ |
+| 12 | HACS packaging | ⏳ |
 
 Follow-ups also tracked: ozone/fog factors, `diagnostics.py` support, a
 brand icon, and a test-timezone cleanup in the coordinator tests.

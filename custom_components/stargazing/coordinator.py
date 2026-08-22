@@ -172,14 +172,27 @@ class StargazingCoordinator(DataUpdateCoordinator[list[NightlyScore]]):
         except OpenMeteoError as err:
             raise UpdateFailed(f"Failed to fetch Open-Meteo forecast: {err}") from err
 
-        nightly_scores: list[NightlyScore] = []
-        for offset in range(NUM_NIGHTS_AHEAD):
-            night_of = first_night + timedelta(days=offset)
-            nightly_scores.append(
-                self._score_one_night(night_of, readings, timezone_str)
-            )
+        # astral (via pytz) and skyfield (17 MB ephemeris load) do blocking
+        # file I/O on first use per process. Run the whole scoring pass in
+        # an executor thread so the event loop never stalls -- HA logs
+        # "Detected blocking call" warnings otherwise, and the UI freezes
+        # for the duration of each refresh.
+        return await self.hass.async_add_executor_job(
+            self._score_all_nights, readings, first_night, timezone_str
+        )
 
-        return nightly_scores
+    def _score_all_nights(
+        self, readings: list, first_night: date, timezone_str: str
+    ) -> list[NightlyScore]:
+        """Sync scoring pass over all nights; runs in an executor thread
+        (see _async_update_data). Read-only use of self._* config, so it
+        is safe to run off the loop."""
+        return [
+            self._score_one_night(
+                first_night + timedelta(days=offset), readings, timezone_str
+            )
+            for offset in range(NUM_NIGHTS_AHEAD)
+        ]
 
     def _score_one_night(
         self, night_of: date, readings: list, timezone_str: str

@@ -13,6 +13,8 @@ cutover is deterministic regardless of when the suite actually runs.
 """
 
 import datetime
+import threading
+from unittest.mock import patch
 
 import pytest
 from astral import Depression, Observer
@@ -153,6 +155,30 @@ class TestDetermineNightOf:
     def test_just_before_noon_is_still_last_night(self):
         now = datetime.datetime(2026, 1, 15, 11, 59)
         assert determine_night_of(now) == datetime.date(2026, 1, 14)
+
+
+class TestScoringRunsOffEventLoop:
+    async def test_scoring_pass_runs_in_executor_thread(self, hass, freezer):
+        # Regression: astral/pytz and skyfield's ephemeris load do blocking
+        # file I/O, which HA flags with "Detected blocking call" warnings
+        # when run on the event loop (and it freezes the UI). The whole
+        # scoring pass must execute in an executor worker thread instead.
+        hass.config.time_zone = "Europe/London"
+        freezer.move_to("2026-01-15 20:00:00")
+
+        seen_threads = []
+        original = StargazingCoordinator._score_one_night
+
+        def spy(self, night_of, readings, timezone_str):
+            seen_threads.append(threading.current_thread().name)
+            return original(self, night_of, readings, timezone_str)
+
+        coordinator = make_coordinator(hass, FakeOpenMeteoClient(MULTI_NIGHT_READINGS))
+        with patch.object(StargazingCoordinator, "_score_one_night", spy):
+            await coordinator._async_update_data()
+
+        assert len(seen_threads) == NUM_NIGHTS_AHEAD
+        assert all(name != "MainThread" for name in seen_threads)
 
 
 # ---------------------------------------------------------------------------
