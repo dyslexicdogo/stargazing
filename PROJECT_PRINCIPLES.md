@@ -101,12 +101,14 @@ Each factor is scored 0–100 (higher = better) and combined into a weighted
 
 ### Current status
 
-- **Done:** Phases 1–11 (notifications). 179 tests passing.
-  `scripts/develop` boots HA with the integration loaded; the config
-  flow, options wizard, and nightly-notification arming are verified
-  working in the live UI.
-- **Pending:** HACS packaging (the last slice of old Phase 11), plus the
-  follow-ups listed below.
+- **Done:** all 12 roadmap phases. 190 tests passing. `scripts/develop`
+  boots HA with the integration loaded; the config flow, options
+  wizard, nightly notifications, and the HACS package structure are
+  verified working in the live UI.
+- **Remaining (manual):** publishing a GitHub Release tagged `v0.1.0`
+  (matching the manifest version) when ready — HACS installs straight
+  from `main` without one, so this only pins the version. Remaining
+  feature follow-ups are listed below.
 
 ### Flagged follow-ups
 

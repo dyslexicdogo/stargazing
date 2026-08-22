@@ -1,6 +1,4 @@
-when user want to test notification, they can use notify.persistent_notification for quick testing 
-
-please remove 
+1. Pease remove 
 
 
 NOT used in this repo:
@@ -9,3 +7,7 @@ NOT used in this repo:
   factor" visualization and dense single-panel readouts inspired our
   per-factor color coding and the forecast card's breakdown panel.
 
+
+2. brand icons (get specificaitons for sunbathing repo)
+
+3. 

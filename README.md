@@ -1,5 +1,7 @@
 # 🔭 Stargazing
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+
 A Home Assistant custom integration that scores hourly stargazing conditions
 using [Open-Meteo](https://open-meteo.com/) weather data — tuned for places
 where dark skies are worth checking before you drag a telescope outside
@@ -11,10 +13,10 @@ site and the
 Unlike fixed daytime windows, stargazing windows are **dynamic** — tied to
 the actual astronomical dusk/dawn for your location and season.
 
-> **Status:** Phases 1–9 of the build roadmap are complete (scoring, API
-> client, astronomical windows, coordinator, config flow, sensors, full
-> integration tests, and the 3-night forecast Lovelace card). See
-> [Roadmap](#roadmap).
+> **Status:** all 12 roadmap phases are complete — scoring, API client,
+> astronomical windows, coordinator, config flow, sensors, the 3-night
+> forecast card, the 8-page options wizard, notifications, and HACS
+> packaging. See [Roadmap](#roadmap).
 
 ---
 
@@ -77,8 +79,9 @@ Lovelace card (custom:stargazing-forecast-card) — 3-night chart with
   delivered through any notify entity (e.g. the Companion App); the check
   refreshes the forecast first so it decides on fresh data
 
-**Planned:**
-- HACS packaging
+**Built in Phase 12 (packaging):**
+- Installable through HACS as a custom integration repository —
+  `hacs.json`, MIT `LICENSE`, and manifest metadata validated by tests
 
 ## Scoring
 
@@ -139,7 +142,17 @@ fallback keeps a window.
 
 ## Installation
 
-> HACS packaging ships in Phase 11 — until then, install manually.
+### HACS (recommended)
+
+1. Make sure [HACS](https://hacs.xyz/) is installed.
+2. HACS → Integrations → ⋮ → **Custom repositories** → add
+   `https://github.com/dyslexicdogo/stargazing`, category
+   **Integration**.
+3. Search for **Stargazing** and install.
+4. Restart Home Assistant.
+
+> Until a GitHub Release is published, HACS installs straight from the
+> `main` branch — same code either way; a release just pins the version.
 
 ### Manual
 
@@ -147,13 +160,6 @@ fallback keeps a window.
    `config/custom_components/` folder (keep the bundled `de421.bsp`
    ephemeris — it's required, ~16 MB).
 2. Restart Home Assistant.
-
-### HACS (once packaged)
-
-1. HACS → Integrations → ⋮ → **Custom repositories** → add
-   `https://github.com/dyslexicdogo/stargazing` as an **Integration**.
-2. Search for **Stargazing** and install.
-3. Restart Home Assistant.
 
 ## Setup
 
@@ -259,7 +265,7 @@ resources:
 | 9 | **Lovelace forecast card** (`custom:stargazing-forecast-card`, served from `www/`) | ✅ |
 | 10 | **Options wizard** — 6 sequential pages: preset / night type / cloud thresholds / sky thresholds / falloff spans / weights | ✅ |
 | 11 | **Notifications** — daily threshold check via any notify entity, configured on wizard pages 7–8 | ✅ |
-| 12 | HACS packaging | ⏳ |
+| 12 | **HACS packaging** — `hacs.json` + `LICENSE` + manifest metadata; installable as a custom repository | ✅ |
 
 Follow-ups also tracked: ozone/fog factors, `diagnostics.py` support, a
 brand icon, and a test-timezone cleanup in the coordinator tests.
@@ -323,4 +329,4 @@ they shape Phase 9:
 
 ## License
 
-MIT (license file to be added with HACS packaging).
+MIT — see [`LICENSE`](LICENSE).
