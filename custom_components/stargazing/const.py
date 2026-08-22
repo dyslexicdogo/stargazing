@@ -6,6 +6,11 @@ DOMAIN = "stargazing"
 
 CONF_PRESET = "preset"
 CONF_TWILIGHT_TIER = "twilight_tier"
+# Key holding the {"edges"/"spans"/"weights"} scoring dict. Lives in
+# entry.data (written by the config flow's preset step) AND in
+# entry.options (written by the options wizard); __init__.py overlays
+# options over data per-key via presets.overlay_score_config().
+CONF_SCORE_CONFIG = "score_config"
 
 PRESET_STRICT = "strict"
 PRESET_BALANCED = "balanced"

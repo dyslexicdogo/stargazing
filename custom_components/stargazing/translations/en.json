@@ -25,5 +25,71 @@
     "abort": {
       "already_configured": "This location is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Scoring preset",
+        "description": "Step 1 of 6: pick the baseline preset. The following pages are prefilled from it -- keeping your current preset keeps your tuned values, switching to a different preset resets every tuning page to that preset's numbers."
+      },
+      "night": {
+        "title": "Night type",
+        "description": "Step 2 of 6: how dark does a night need to be? The darkest reachable tier in your chosen chain is used, falling back shallower so a night is never skipped.",
+        "data": {
+          "twilight_tier": "Preferred darkness (night type)"
+        }
+      },
+      "cloud_thresholds": {
+        "title": "Cloud thresholds",
+        "description": "Step 3 of 6: hours at or below each ceiling score a perfect 100 for that cloud layer.",
+        "data": {
+          "low_cloud_max": "Low cloud ceiling (%)",
+          "mid_cloud_max": "Mid cloud ceiling (%)",
+          "high_cloud_max": "High cloud ceiling (%)"
+        }
+      },
+      "sky_thresholds": {
+        "title": "Sky and seeing thresholds",
+        "description": "Step 4 of 6: 'ceiling' factors score 100 at or below their value; 'floor' factors (spread, visibility) score 100 at or above.",
+        "data": {
+          "dew_point_spread_min": "Dew-point spread floor (\u00b0C)",
+          "visibility_min": "Visibility floor (m)",
+          "jet_stream_wind_max": "Jet-stream wind ceiling (m/s)",
+          "moon_illumination_max": "Moon illumination ceiling (%)",
+          "precipitation_probability_max": "Precipitation chance ceiling (%)",
+          "wind_speed_max": "Surface wind ceiling (km/h)"
+        }
+      },
+      "falloff_spans": {
+        "title": "Falloff spans",
+        "description": "Step 5 of 6: how far past each threshold the factor's score takes to fall from 100 to 0. Bigger span = gentler penalty.",
+        "data": {
+          "low_cloud_max": "Low cloud span (% points)",
+          "mid_cloud_max": "Mid cloud span (% points)",
+          "high_cloud_max": "High cloud span (% points)",
+          "dew_point_spread_min": "Dew-point spread span (\u00b0C)",
+          "visibility_min": "Visibility span (m)",
+          "jet_stream_wind_max": "Jet-stream wind span (m/s)",
+          "moon_illumination_max": "Moon illumination span (%)",
+          "precipitation_probability_max": "Precipitation chance span (%)",
+          "wind_speed_max": "Surface wind span (km/h)"
+        }
+      },
+      "weights": {
+        "title": "Factor weights",
+        "description": "Step 6 of 6: how much each factor matters, 0-5. They do not need to sum to anything -- scores normalize automatically.",
+        "data": {
+          "low_cloud": "Low cloud importance",
+          "mid_cloud": "Mid cloud importance",
+          "high_cloud": "High cloud importance",
+          "dew_point_spread": "Dew-point spread importance",
+          "visibility": "Visibility importance",
+          "jet_stream_wind": "Jet-stream wind importance",
+          "moon_illumination": "Moon illumination importance",
+          "precipitation_probability": "Precipitation chance importance",
+          "wind_speed": "Surface wind importance"
+        }
+      }
+    }
   }
 }

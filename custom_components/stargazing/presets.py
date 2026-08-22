@@ -125,3 +125,25 @@ def config_entry_to_score_config(
         FalloffSpans(**spans_data),
         ScoreWeights(**weights_data),
     )
+
+
+def overlay_score_config(base: dict | None, overlay: dict | None) -> dict:
+    """Merge an options-layer score_config over a data-layer one.
+
+    Both layers use the same {"edges"/"spans"/"weights"} shape produced by
+    get_preset_values(). The options layer wins per-key, so the options
+    wizard can persist just the sections it touched while unchanged keys
+    keep falling through to whatever the original config flow stored.
+    Unknown keys are deliberately passed through here --
+    config_entry_to_score_config() already filters those against the
+    dataclass fields, keeping this function shape-agnostic.
+    """
+    merged: dict = {}
+    for section in ("edges", "spans", "weights"):
+        combined = {
+            **((base or {}).get(section) or {}),
+            **((overlay or {}).get(section) or {}),
+        }
+        if combined:
+            merged[section] = combined
+    return merged

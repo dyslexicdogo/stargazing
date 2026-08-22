@@ -26,9 +26,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import OpenMeteoClient
-from .const import CARD_RESOURCES, CONF_TWILIGHT_TIER, TWILIGHT_TIER_CHOICES
+from .const import (
+    CARD_RESOURCES,
+    CONF_SCORE_CONFIG,
+    CONF_TWILIGHT_TIER,
+    DEFAULT_TWILIGHT_TIER,
+    TWILIGHT_TIER_CHOICES,
+)
 from .coordinator import StargazingCoordinator
-from .presets import config_entry_to_score_config, get_preset_values
+from .presets import config_entry_to_score_config, get_preset_values, overlay_score_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,8 +125,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: StargazingConfigEntry) -
         longitude=entry.data[CONF_LONGITUDE],
         elevation=entry.data.get(CONF_ELEVATION, 0),
     )
-    edges, spans, weights = config_entry_to_score_config(entry.data["score_config"])
-    tiers = TWILIGHT_TIER_CHOICES[entry.data[CONF_TWILIGHT_TIER]]
+    # Options layer wins per-key over the data layer: the options wizard
+    # writes score_config / twilight_tier into entry.options, while the
+    # original values stay untouched in entry.data as the fallback base.
+    score_data = overlay_score_config(
+        entry.data.get(CONF_SCORE_CONFIG), entry.options.get(CONF_SCORE_CONFIG)
+    )
+    edges, spans, weights = config_entry_to_score_config(score_data)
+    tier_name = entry.options.get(
+        CONF_TWILIGHT_TIER, entry.data.get(CONF_TWILIGHT_TIER, DEFAULT_TWILIGHT_TIER)
+    )
+    tiers = TWILIGHT_TIER_CHOICES[tier_name]
 
     session = async_get_clientsession(hass)
     client = OpenMeteoClient(session)

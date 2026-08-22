@@ -19,10 +19,13 @@ from custom_components.stargazing.client import BASE_URL
 from custom_components.stargazing.const import (
     CARD_RESOURCES,
     CONF_PRESET,
+    CONF_SCORE_CONFIG,
     CONF_TWILIGHT_TIER,
     DOMAIN,
     PRESET_BALANCED,
     TIER_ASTRONOMICAL,
+    TIER_CIVIL,
+    TWILIGHT_TIER_CHOICES,
 )
 from custom_components.stargazing.coordinator import StargazingCoordinator
 from custom_components.stargazing.presets import get_preset_values
@@ -140,6 +143,38 @@ async def test_setup_entry_coordinator_has_scored_data_after_first_refresh(
     night_0 = entry.runtime_data.data[0]
     assert len(night_0.hourly_scores) == 2
     assert night_0.hourly_scores[0].breakdown.total >= 0.0
+
+
+async def test_setup_entry_applies_options_over_data(hass, freezer):
+    # Options layer wins per-key over the data layer: one overridden edge
+    # plus an overridden tier must reach the coordinator, while untouched
+    # keys keep falling through to the data layer's preset values.
+    freezer.move_to("2026-01-15 20:00:00")
+    hass.config.time_zone = "Europe/London"
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=make_entry().data,
+        options={
+            CONF_TWILIGHT_TIER: TIER_CIVIL,
+            CONF_SCORE_CONFIG: {"edges": {"low_cloud_max": 33.0}},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    with aioresponses() as mocked:
+        mocked.get(URL_PATTERN, payload=VALID_PAYLOAD, repeat=True)
+        assert await hass.config_entries.async_setup(entry.entry_id) is True
+
+    assert entry.state is ConfigEntryState.LOADED
+    coordinator = entry.runtime_data
+
+    assert coordinator._edges.low_cloud_max == 33.0  # options override
+    balanced_edges = get_preset_values(PRESET_BALANCED)["edges"]
+    assert coordinator._edges.visibility_min == balanced_edges["visibility_min"]
+    assert coordinator._spans.low_cloud_max == 60.0  # spans section untouched
+    assert coordinator._weights.low_cloud == 5.0  # weights section untouched
+    assert coordinator._tiers == TWILIGHT_TIER_CHOICES[TIER_CIVIL]
 
 
 async def test_unload_entry_returns_true(hass):

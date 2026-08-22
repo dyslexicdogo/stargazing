@@ -58,15 +58,20 @@ Lovelace card (custom:stargazing-forecast-card) — 3-night chart with
   Nautical / Civil
 - Three night sensors: tonight, tomorrow night, and night+2 peaks, each
   with the full per-hour forecast available as attributes
-- 143 passing tests across the client, scoring, windows, coordinator,
+- 146 passing tests across the client, scoring, windows, coordinator,
   config flow, and sensors
 
 **Built in Phase 9:**
 - `custom:stargazing-forecast-card` — a graphical 3-night score-over-time
   chart; tap any hour to see its nine-factor breakdown below the chart
 
+**Built in Phase 10:**
+- Six-page options wizard — preset / night type / cloud thresholds / sky
+  thresholds / falloff spans / weights, one page at a time; keeping your
+  preset preserves your tuned values, switching preset resets them;
+  saving reloads the integration automatically
+
 **Planned:**
-- Options flow (edit preset/tier after setup, collapsible sections)
 - Notifications + HACS packaging
 
 ## Scoring
@@ -246,7 +251,7 @@ resources:
 | 7 | Sensors (`sensor.py`) | ✅ |
 | 8 | Full integration tests | ✅ |
 | 9 | **Lovelace forecast card** (`custom:stargazing-forecast-card`, served from `www/`) | ✅ |
-| 10 | Options flow with collapsible sections | ⏳ |
+| 10 | **Options wizard** — 6 sequential pages: preset / night type / cloud thresholds / sky thresholds / falloff spans / weights | ✅ |
 | 11 | Notifications + HACS packaging | ⏳ |
 
 Follow-ups also tracked: ozone/fog factors, `diagnostics.py` support, a

@@ -91,20 +91,19 @@ Each factor is scored 0–100 (higher = better) and combined into a weighted
    entities land correctly
 9. **Lovelace card** — built inside `custom_components/<domain>/www/`
    **from the start**, never at the repo root
-10. **Options flow with sections** — thresholds/ranges/weights/
-    notifications, built with collapsible sections from day one
+10. **Options flow** — one concern per page, walked sequentially
+    (deliberate deviation from the original "collapsible sections" plan,
+    by user preference: preset → night type → cloud thresholds → sky
+    thresholds → falloff spans → weights)
 11. **Notifications + HACS packaging** — same proven pattern
 
 ### Current status
 
-- **Done:** Phases 1–8. 137 tests passing. `scripts/develop` boots HA with
-  the integration loaded; the config flow is verified working in the live
-  UI.
-- **In progress:** Phase 9 — two Lovelace cards (graphical 3-night
-  forecast + current conditions). Design spec finalized; sensor
-  `forecast`/`upcoming` attributes and the card files are next.
-- **Pending:** Phase 10 (options flow), Phase 11 (notifications + HACS
-  packaging), plus the follow-ups listed below.
+- **Done:** Phases 1–10. 146 tests passing. `scripts/develop` boots HA with
+  the integration loaded; the config flow and the options wizard are
+  verified working in the live UI.
+- **Pending:** Phase 11 (notifications + HACS packaging), plus the
+  follow-ups listed below.
 
 ### Flagged follow-ups
 
